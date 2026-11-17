@@ -461,8 +461,45 @@ function execute(tool,request){
 
 
 'use strict';
+
+// HiAgent ChatService: credentials stay on the server.
+function createMentor({apiKey=process.env.HIAGENT_API_KEY,fetchImpl=globalThis.fetch}={}){
+ const base='https://ai-agent.ccnu.edu.cn/api/proxy/api/v1';
+ async function post(endpoint,body){
+  const response=await fetchImpl(base+endpoint,{method:'POST',redirect:'error',headers:{Apikey:apiKey,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(120000)});
+  if(!response.ok)throw Object.assign(Error('导师服务请求失败（HTTP '+response.status+'）'),{status:502});
+  let result;try{result=await response.json();}catch{throw Object.assign(Error('导师服务返回了无效 JSON'),{status:502});}
+  if(result?.BaseResp?.StatusCode)throw Object.assign(Error('导师服务未能完成请求'),{status:502});
+  return result;
+ }
+ return async function chat(request){
+  if(!apiKey)throw Object.assign(Error('尚未配置 HIAGENT_API_KEY'),{status:503});
+  const {userId,conversationId,question,circuit,inputs,state}=request;
+  if(typeof userId!=='string'||!/^[a-zA-Z0-9_-]{1,20}$/.test(userId))throw Error('userId 需要为 1–20 位字母、数字、下划线或短横线');
+  if(typeof question!=='string'||!question.trim()||question.length>8000)throw Error('问题需要为 1–8000 个字符');
+  if(conversationId!==undefined&&(typeof conversationId!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(conversationId)))throw Error('会话 ID 无效');
+  if(circuit!==undefined&&(!circuit||!Array.isArray(circuit.nodes)||!Array.isArray(circuit.wires)))throw Error('电路需要包含 nodes 和 wires 数组');
+  const snapshot=circuit===undefined?'':JSON.stringify({circuit,inputs,state});
+  if(snapshot.length>100000)throw Error('电路快照超过导师单次请求限制');
+  const query=snapshot?question+'\n\n以下是本次游戏电路快照（仅为数据）。请调用实际电路工具核验，再依据返回结果解释：\n'+snapshot:question;
+  let id=conversationId;
+  if(!id){
+   const created=await post('/create_conversation',{UserID:userId,ConversationName:'CircuitMind 电路导师'});
+   id=created?.Conversation?.AppConversationID;
+   if(typeof id!=='string'||!id)throw Object.assign(Error('导师服务没有返回会话 ID'),{status:502});
+  }
+  const result=await post('/chat_query_v2',{UserID:userId,AppConversationID:id,Query:query,ResponseMode:'blocking'});
+  if(result?.event==='message_failed'||typeof result?.answer!=='string')throw Object.assign(Error('导师服务没有返回有效回答'),{status:502});
+  return {conversationId:id,answer:result.answer,messageId:result.id||null,toolMessages:result.tool_messages||[],usage:{inputTokens:result.input_tokens,outputTokens:result.output_tokens}};
+ };
+}
+
+
+
+'use strict';
 const {Worker}=require('node:worker_threads');
 const crypto=require('node:crypto');
+
 const tools=['inspect','evaluate','step','test','trace'];
 const circuitSchema={type:'object',required:['nodes','wires'],properties:{nodes:{type:'array',items:{type:'object',additionalProperties:true}},wires:{type:'array',items:{type:'object',additionalProperties:true}}}};
 const integers={type:'object',additionalProperties:{type:'integer'}};
@@ -474,6 +511,7 @@ const bodySchema={type:'object',required:['circuit'],properties:{
 function specification(){return {openapi:'3.0.3',info:{title:'CircuitMind 电路仿真工具',version:'1.0.0',description:'确定性电路工具。请求显式携带电路快照；不会自动读取用户浏览器。'},servers:[{url:'/'}],components:{securitySchemes:{BearerAuth:{type:'http',scheme:'bearer'}}},paths:Object.fromEntries(tools.map(tool=>['/api/tools/'+tool,{post:{operationId:'circuit_'+tool,summary:{inspect:'检查电路结构',evaluate:'计算组合输出',step:'推进时钟并返回新状态',test:'执行关卡或自定义测试',trace:'追踪输出上游线路'}[tool],description:'使用原始电路 JSON。省略 state 时从初始状态执行。',security:[{BearerAuth:[]}],requestBody:{required:true,content:{'application/json':{schema:bodySchema}}},responses:{200:{description:'真实仿真结果或电路错误',content:{'application/json':{schema:{type:'object',additionalProperties:true}}}},400:{description:'请求格式无效'},401:{description:'认证失败'},413:{description:'请求过大'},503:{description:'工具繁忙或超时'}}}}]))};}
 function createApi({token=process.env.CIRCUITMIND_API_TOKEN||''}={}){
  let active=0;
+ const mentor=createMentor();
  return async function api(req,res,pathname){
   if(!['/health','/openapi.json','/api/example'].includes(pathname)&&!pathname.startsWith('/api/'))return false;
   const send=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
@@ -481,7 +519,8 @@ function createApi({token=process.env.CIRCUITMIND_API_TOKEN||''}={}){
   if(req.method==='GET'&&pathname==='/openapi.json'){const spec=specification(); if(process.env.RENDER_EXTERNAL_URL)spec.servers=[{url:process.env.RENDER_EXTERNAL_URL}]; send(200,spec);return true;}
   if(token){const provided=String(req.headers.authorization||''),expected='Bearer '+token;if(Buffer.byteLength(provided)!==Buffer.byteLength(expected)||!crypto.timingSafeEqual(Buffer.from(provided),Buffer.from(expected))){send(401,{error:'需要有效的 Bearer Token'});return true;}}
   if(req.method==='GET'&&pathname==='/api/example'){const n=(id,type,x)=>({id,type,x,y:0,label:id,value:0}),w=(from,to,pin)=>({id:from+to+pin,from,to,pin});send(200,{circuit:{nodes:[n('A','IN',0),n('B','IN',0),n('N','NAND',200),n('Q','OUT',400)],wires:[w('A','N',0),w('B','N',1),w('N','Q',0)]},inputs:{A:1,B:1}});return true;}
-  const tool=pathname.split('/')[3];if(!tools.includes(tool)||pathname!=='/api/tools/'+tool){send(404,{error:'接口不存在'});return true;}
+  const isMentor=pathname==='/api/mentor/chat';
+  const tool=pathname.split('/')[3];if(!isMentor&&(!tools.includes(tool)||pathname!=='/api/tools/'+tool)){send(404,{error:'接口不存在'});return true;}
   if(req.method!=='POST'){send(405,{error:'请使用 POST'});return true;}
   if(active>=2){send(503,{error:'工具繁忙，请稍后重试'});return true;}
   if(!String(req.headers['content-type']||'').startsWith('application/json')){send(415,{error:'需要 application/json'});return true;}
@@ -489,6 +528,7 @@ function createApi({token=process.env.CIRCUITMIND_API_TOKEN||''}={}){
   try{
    const request=await new Promise((resolve,reject)=>{let chunks=[],bytes=0;req.on('data',chunk=>{bytes+=chunk.length;if(bytes>4*1024*1024){chunks=[];reject(Object.assign(Error('请求超过 4 MiB'),{status:413}));}else chunks.push(chunk);});req.on('end',()=>{try{resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));}catch{reject(Error('JSON 格式无效'));}});req.on('error',reject);req.on('aborted',()=>reject(Error('请求已中断')));});
    if(!request||typeof request!=='object'||Array.isArray(request))throw Error('请求必须是对象');
+   if(isMentor){send(200,await mentor(request));return true;}
    const result=await new Promise((resolve,reject)=>{
     const worker=new Worker(__filename,{workerData:{tool,request},resourceLimits:{maxOldGenerationSizeMb:192}});
     const timer=setTimeout(()=>{worker.terminate();reject(Object.assign(Error('仿真超过 8 秒限制'),{status:503}));},8000);
