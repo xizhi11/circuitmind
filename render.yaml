@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: circuitmind-classroom
+    runtime: node
+    plan: free
+    region: singapore
+    branch: codex/classroom
+    rootDir: classroom
+    autoDeployTrigger: 'off'
+    buildCommand: node --check server.cjs && node verify.cjs && node verify-classroom.cjs
+    startCommand: node server.cjs
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.16.0
+      - key: CIRCUITMIND_HOST
+        value: 0.0.0.0
+      - key: CIRCUITMIND_CLASSROOM_CODE
+        generateValue: true
+      - key: HIAGENT_API_KEY
+        sync: false
