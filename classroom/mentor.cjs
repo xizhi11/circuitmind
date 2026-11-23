@@ -8,9 +8,15 @@ function createMentor({apiKey=process.env.HIAGENT_API_KEY,fetchImpl=globalThis.f
   const response=await fetchImpl(base+endpoint,{method:'POST',redirect:'error',headers:{Apikey:apiKey,'Content-Type':'application/json'},body:JSON.stringify({...body,AppKey:apiKey}),signal:AbortSignal.timeout(120000)});
   if(response.status===403){
    const details=await response.json().catch(()=>null);
-   if(details?.ResponseMetadata?.Error?.Message==='Unauthorized: invalid token'){
+   const rejection=details?.ResponseMetadata?.Error;
+   if(rejection?.Message==='Unauthorized: invalid token'){
     throw Object.assign(Error('教育智能体平台拒绝了 API 密钥，请从该导师的「发布 → API 密钥」重新复制。'),{status:502});
    }
+   const action=endpoint==='/create_conversation'?'创建会话':'提交提问';
+   const html=response.headers?.get('content-type')?.includes('text/html');
+   const message=html?`教育智能体平台的网关拒绝了请求（${action}，HTTP 403）。`:
+    `教育智能体平台拒绝${action}（HTTP 403）。`;
+   throw Object.assign(Error(message),{status:502});
   }
   if(!response.ok)throw Object.assign(Error('导师服务请求失败（HTTP '+response.status+'）'),{status:502});
   let result;try{result=await response.json();}catch{throw Object.assign(Error('导师服务返回了无效 JSON'),{status:502});}

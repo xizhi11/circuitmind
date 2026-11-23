@@ -264,7 +264,10 @@ $('mentor-form').onsubmit=async event=>{
    status.textContent=result?.error||'请重新输入班级邀请码。';
    return;
   }
-  if(!response.ok)throw Error(result?.error||'导师请求失败（HTTP '+response.status+'）');
+  if(!response.ok){
+   if(mentorSession===session&&result?.evidence)renderMentorEvidence(result.evidence);
+   throw Error(result?.error||'导师请求失败（HTTP '+response.status+'）');
+  }
   if(typeof result?.answer!=='string'||typeof result?.conversationId!=='string')throw Error('导师没有返回有效回答。');
   if(mentorSession!==session)return;
   session.conversationId=result.conversationId;

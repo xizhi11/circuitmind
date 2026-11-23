@@ -9,8 +9,10 @@ async function main(){
  const origin='https://classroom.example.com';
  const inviteCode='test-invite-123456';
  const mentorCalls=[];
+ let mentorUnavailable=false;
  const classroom=createClassroom({inviteCode,origin});
  const api=createApi({token:'',classroom,mentor:async request=>{
+  if(mentorUnavailable)throw Object.assign(Error('导师服务暂时不可用'),{status:502});
   mentorCalls.push(request);
   return {answer:'请检查 NAND 的第二个输入。',conversationId:'conversation-'+request.userId};
  }});
@@ -55,6 +57,11 @@ async function main(){
   const fixed=await call(chat,{cookie:first,body:{question,circuit,levelId:'nand',conversationId:wrong.data.conversationId}});
   assert.deepEqual(fixed.data.evidence,{kind:'tests',passed:4,total:4});
   assert.equal(fixed.data.conversationId,wrong.data.conversationId);
+  mentorUnavailable=true;
+  const unavailable=await call(chat,{cookie:second,body:{question,circuit,levelId:'nand'}});
+  assert.equal(unavailable.status,502);
+  assert.deepEqual(unavailable.data.evidence,{kind:'tests',passed:4,total:4});
+  mentorUnavailable=false;
   for(let index=0;index<6;index++)assert.equal((await call(chat,{cookie:first,body:{question}})).status,200);
   assert.equal((await call(chat,{cookie:first,body:{question}})).status,429);
   console.log('PASS classroom invite, two isolated mentor conversations, quotas, and broken/repaired NAND evidence');

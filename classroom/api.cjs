@@ -90,12 +90,11 @@ function createApi({token=process.env.CIRCUITMIND_API_TOKEN||'',mentor=createMen
   if(req.method!=='POST'){send(405,{error:'请使用 POST'});return true;}
   if(classroom&&!session){send(401,{error:'请输入班级邀请码。'});return true;}
   if(isMentor&&classroom){
-   let finish;
+   let finish,evidence;
    try{
     const request=await readJson(req,512*1024);
     if(typeof request.question!=='string'||!request.question.trim()||request.question.length>8000)throw Error('问题需要为 1–8000 个字符');
     finish=classroom.begin(session,request.conversationId);
-    let evidence;
     if(request.circuit){
      if(active>=2)evidence={kind:'unavailable',message:'仿真正在处理其他请求，请稍后重试。'};
      else{
@@ -106,7 +105,7 @@ function createApi({token=process.env.CIRCUITMIND_API_TOKEN||'',mentor=createMen
     const result=await mentor({...request,userId:session.userId,evidence});
     session.conversations.add(result.conversationId);
     send(200,{...result,evidence});
-   }catch(err){send(err.status||400,{error:err.message});}finally{finish?.();}
+   }catch(err){send(err.status||400,{error:err.message,evidence});}finally{finish?.();}
    return true;
   }
   if(active>=2){send(503,{error:'工具繁忙，请稍后重试'});return true;}
