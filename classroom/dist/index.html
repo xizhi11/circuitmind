@@ -5,7 +5,7 @@
 <header class="topbar">
   <div class="actions header-tools">
     <div class="brand"><span aria-hidden="true">◈</span><strong>CircuitMind</strong></div>
-    <button id="home">☰ 关卡</button><button id="backup" title="备份全部进度">保存</button>
+    <button id="home">☰ 关卡</button><button id="workshop">创意工坊</button><button id="backup" title="备份全部进度">保存</button>
     <button id="undo" title="Ctrl+Z">撤销</button><button id="redo" title="Ctrl+Y">重做</button>
     <button id="zoom-out" aria-label="缩小画布">−</button><button id="zoom-in" aria-label="放大画布">＋</button>
   </div>
@@ -44,8 +44,9 @@
   <main class="workbench">
     <section class="mission">
       <div><span id="tag" class="eyebrow"></span><p id="description"></p></div>
-      <div class="actions mission-actions"><button id="test" class="primary">运行测试</button><button id="next-level" hidden>下一关</button></div>
+      <div class="actions mission-actions"><button id="test" class="primary">运行测试</button><button id="next-level" hidden>下一关</button><button id="workshop-view" hidden>编辑电路与汇编</button></div>
     </section>
+    <section id="workshop-play" aria-label="工坊试玩" hidden></section>
     <section class="panel" id="drill-panel" hidden><button id="drill-start">开始一轮</button><p id="drill-question" aria-live="polite"></p><input id="drill-answer" aria-label="答案" autocomplete="off" spellcheck="false" hidden><button id="drill-submit" hidden>提交</button></section>
     <section class="editor" aria-label="电路画布">
       <div class="toolbar">
@@ -91,13 +92,25 @@
           <textarea id="program" spellcheck="false" aria-label="汇编程序"></textarea><button id="assemble" class="primary">汇编并加载</button>
           <p class="muted" id="instruction-guide"></p><button id="use-machine" hidden>将这台机器用于后续编程关</button>
           <button id="keyboard-input" hidden>点击后向 CPU 输入按键</button><pre id="device-state" hidden aria-label="外部设备"></pre><pre id="terminal" aria-label="程序输出终端"></pre><div id="cpu-state"></div>
-          <div id="mines-panel" hidden><h3 id="mine-heading">CPU 屏幕 · 3 × 3</h3><button id="mine-mode" hidden></button><div id="mines-grid"></div><p id="mines-status"></p></div>
+          <section id="mines-panel" hidden aria-labelledby="mine-heading">
+            <div class="mine-toolbar">
+              <div><h3 id="mine-heading">CPU 屏幕 · 3 × 3</h3><p id="mine-flags" class="muted" hidden></p></div>
+              <div class="actions"><button id="mine-mode" aria-pressed="false" hidden>插旗模式</button><button id="mine-new-game" hidden>新棋局</button></div>
+            </div>
+            <div id="mines-grid" role="group" aria-label="扫雷棋盘"></div>
+            <p id="mines-status" role="status"></p>
+            <p id="mine-help" class="muted" hidden>点击格子揭开，右键或使用插旗模式标记。数字表示周围地雷数。</p>
+          </section>
         </section>
       </section>
     </div>
   </section>
 </div>
 <dialog id="world"><div class="dialog-heading"><div><p class="eyebrow">CIRCUITMIND · CAMPAIGN</p><h1>从逻辑门，走向自己的计算机</h1><p>构造 · 验证 · 封装 · 复用</p></div><div class="actions"><button id="restart" class="subtle">重开当前关</button><button id="close-world">返回电路</button></div></div><div id="world-map"></div></dialog>
+<dialog id="workshop-dialog" aria-labelledby="workshop-title">
+  <div class="dialog-heading"><h2 id="workshop-title">创意工坊</h2><button id="close-workshop" type="button">关闭</button></div>
+  <div id="workshop-works"></div>
+</dialog>
 <dialog id="package-dialog"><h2>保存为自定义元件</h2><p>所有 IN / OUT 是公开接口，内部电路会独立保存。每个实例拥有自己的寄存器和内存，共享同一个时钟。</p><label>元件名称 <input id="package-name" maxlength="32" value="我的元件"></label><p id="package-ports"></p><div class="actions"><button id="save-package" class="primary">验证并保存</button><button id="cancel-package">取消</button></div></dialog>
 <dialog id="mentor-dialog" aria-labelledby="mentor-title">
   <div class="dialog-heading"><h2 id="mentor-title">CircuitMind 电路导师</h2><button id="close-mentor" type="button">关闭</button></div>

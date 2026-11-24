@@ -226,7 +226,7 @@ byId.get('pc-build').verify=net=>{
 };
 Game.guidedPath=guided.map(([id])=>byId.get(id));
 Game.prerequisite=l=>{
- if(l.id==='sandbox')return null;
+ if(l.id==='sandbox'||l.workshop)return null;
  const primary=Game.guidedPath.indexOf(l);
  if(primary>=0)return Game.guidedPath.slice(0,primary).reverse().find(Game.isGraded)||null;
  const i=Game.levels.indexOf(l);

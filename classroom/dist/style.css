@@ -193,6 +193,27 @@ th { color: var(--muted); font-weight: 400; }
 #mines-grid button { min-height: 36px; font: 1rem var(--mono); color: #9ee1bc; }
 #mines-grid.large-board { grid-template-columns: repeat(8,minmax(0,1fr)); }
 #mines-grid .revealed { background: #13212e; color: #eef4fa; }
+.mine-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+#mine-mode[aria-pressed="true"] { border-color: var(--amber); color: #ffe1aa; }
+#mines-grid .mine-flag { color: #f5cf8b; }
+#mines-grid .mine-hit { color: #ffafb7; background: #562d3b; opacity: 1; }
+#mines-grid .mine-clue-1 { color: #a1d9f2; }
+#mines-grid .mine-clue-2 { color: #ace8ac; }
+#mines-grid .mine-clue-3 { color: #f5c28f; }
+#mines-grid :is(.mine-clue-4,.mine-clue-5,.mine-clue-6,.mine-clue-7,.mine-clue-8) { color: #e1b7ff; }
+#mines-status { min-height: 1.6em; margin-top: 8px; }
+#workshop-dialog { width: min(500px,94vw); }
+.workshop-work p { margin: 5px 0 12px; }
+.workshop-play .layout { grid-template-columns: minmax(0,1fr); grid-template-areas: "stage"; }
+.workshop-play :is(.monitor,.toolbox,.detail-drawer,.editor,#test,#clock-rate,#undo,#redo,#zoom-in,#zoom-out) { display: none; }
+.workshop-play .workbench { width: min(100%,680px); margin-inline: auto; }
+.workshop-play .mission { padding-inline: 0; }
+#workshop-play { padding: clamp(10px,3vw,20px); border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
+#workshop-play #mines-panel { width: min(100%,440px); margin-inline: auto; }
+#workshop-play #mines-grid { gap: clamp(3px,1vw,6px); margin-top: 12px; }
+#workshop-play #mines-grid button { min-width: 0; min-height: 0; aspect-ratio: 1; padding: 0; font-size: clamp(1rem,3vw,1.35rem); }
+#workshop-play #mines-grid .revealed:disabled, #workshop-play #mines-grid .mine-flag:disabled { opacity: .85; }
+#workshop-play #mine-help { margin-top: 6px; font-size: .9rem; }
 dialog { color: #e6edf6; background: #1b293a; border: 1px solid #57718d; border-radius: 7px; padding: 20px; max-width: min(1100px,94vw); max-height: 90vh; }
 dialog::backdrop { background: #0a111bbf; }
 dialog p { color: var(--muted); }

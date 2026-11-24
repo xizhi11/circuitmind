@@ -9,7 +9,7 @@ let viewport={width:1280,height:760},draggedPart=null;
 let inspectionStack=[],multi=new Set(),clipboard=null;
 let completed={},saved={},library=[],breakpoints=new Set();
 let storageDatabase=null;
-let mineFlags=false,deviceScreen=[],pendingKeys=[],peripheral=null;
+let mineFlags=false,deviceScreen=[],pendingKeys=[],peripheral=null,workshopEditing=false;
 let round=null;
 let guided=true,detailTab='component',paletteCategory=null,traceSignals=[];
 const detailScreens={component:'detail-ports',verify:'detail-tests',signals:'detail-trace',program:'detail-code'};
@@ -33,14 +33,15 @@ function locked(l){
  return guided&&!completed[l.id]&&prior&&!completed[prior.id];
 }
 function nextLevel(){
- const path=guided&&Game.guidedPath.includes(level)?Game.guidedPath:Game.levels;
+ if(level.workshop)return null;
+ const path=guided&&Game.guidedPath.includes(level)?Game.guidedPath:Game.levels.filter(l=>!l.workshop);
  return path[path.indexOf(level)+1];
 }
 function firstAvailable(){
  return Game.guidedPath.find(l=>Game.isGraded(l)&&!completed[l.id]&&!locked(l))||Game.guidedPath[0];
 }
 function visibleLessons(){
- return guided?[...Game.guidedPath,Game.levels.find(l=>l.id==='sandbox')]:Game.levels;
+ return guided?[...Game.guidedPath,Game.levels.find(l=>l.id==='sandbox')]:Game.levels.filter(l=>!l.workshop);
 }
 $('guided').checked=guided;
 $('guided').onchange=()=>{
@@ -107,12 +108,27 @@ function starterCircuit(){
  }
  return base;
 }
+function usesMineDevice(){return level.id==='mines32'||level.id==='workshop-mines';}
+function setWorkshopView(editing){
+ workshopEditing=editing;
+ const playing=level.workshop&&!editing;
+ if(playing)document.body.classList.add('workshop-play');
+ else document.body.classList.remove('workshop-play');
+ $('workshop-play').hidden=!playing;
+ const toggle=$('workshop-view');
+ toggle.hidden=!level.workshop;
+ toggle.textContent=playing?'编辑电路与汇编':'返回试玩';
+ const host=$(playing?'workshop-play':'program-panel');
+ const panel=$('mines-panel');
+ if(panel.parentElement!==host)host.append(panel);
+ if(editing&&level.workshop)showDetails('program');
+}
 function openLevel(id,fresh=false,keepContext=false){
  if(!keepContext)inspectionStack=[];multi.clear();
  stop();round=null;level=Game.levels.find(l=>l.id===id)||Game.levels[0];
  doc=clone(!fresh&&saved[level.id]?saved[level.id]:starterCircuit());
  const machine=level.id.startsWith('cm8-')?'cm8':level.machine;
- if(machine&&(!saved[level.id]||fresh&&machine==='cm8')&&!level.id.startsWith('wire-')&&saved['machine-'+machine]){
+ if(machine&&!level.workshop&&(!saved[level.id]||fresh&&machine==='cm8')&&!level.id.startsWith('wire-')&&saved['machine-'+machine]){
   const base=doc,own=clone(saved['machine-'+machine]);
   const rom=own.nodes.find(n=>n.id==='rom'),image=base.nodes.find(n=>n.id==='rom');
   if(rom&&image&&rom.type===image.type){
@@ -140,9 +156,14 @@ function openLevel(id,fresh=false,keepContext=false){
  $('exhaustive').hidden=!exhaustiveWidths();
  $('test-title').textContent=Game.isComputer(level)?'机器与终端':level.id==='sandbox'||level.id==='counter'?'电路状态':'验证你的电路';
  $('hint').textContent=goal;
- $('mines-panel').hidden=!['mines','mines32'].includes(level.id);
- $('mine-mode').hidden=level.id!=='mines32';mineFlags=false;
- $('mine-heading').textContent=level.id==='mines32'?'扫雷 · 8 × 8':'CPU 屏幕 · 3 × 3';
+ const mines=usesMineDevice();
+ $('mines-panel').hidden=!mines&&level.id!=='mines';
+ $('mine-mode').hidden=!mines;mineFlags=false;
+ $('mine-help').hidden=!level.workshop;
+ $('mine-flags').hidden=!level.workshop;
+ $('mine-new-game').hidden=!level.workshop;
+ $('mine-heading').textContent=mines?'扫雷 · 8 × 8':'CPU 屏幕 · 3 × 3';
+ setWorkshopView(false);
  renderNav();renderPalette();$('fit').click();renderTests();renderTrace();
 }
 function renderNav(){
@@ -438,6 +459,7 @@ function wireColor(w,target,width){
  return width>1?'cyan':'purple';
 }
 function draw(){
+ if(level.workshop&&!workshopEditing){renderMineDevice();return;}
  $('back-circuit').hidden=!inspectionStack.length;
  scene.replaceChildren();scene.setAttribute('transform',`translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
  const nodes=new Map(doc.nodes.map(n=>[n.id,n])),traced=new Set(),visited=new Set();
@@ -508,7 +530,7 @@ function draw(){
  $('undo').disabled=!history.length;$('redo').disabled=!future.length;
  renderMonitor();
  if(detailTab==='component'&&!$('detail-body').hidden&&!$('inspector').contains?.(document.activeElement))renderInspector();
- if(level.id==='mines32')renderMineDevice();else if(level.id==='mines')renderMines();
+ if(usesMineDevice())renderMineDevice();else if(level.id==='mines')renderMines();
  if(Game.isComputer(level)){
   const o8=level.machine==='overture';
   const s32=level.machine==='symphony';
@@ -536,39 +558,77 @@ function renderMines(){
  }
  $('mines-status').textContent=memory[250]===1?'CPU 状态：踩雷，程序停机':memory[250]===2?'CPU 状态：胜利，程序停机':'已揭开 '+(memory[252]||0)+' / 8 · 每个输入需多个周期处理';
 }
+function submitMineMove(index,flag){
+ const device=Game.mineDevice,memory=state.ram;
+ if(net.error||!memory){notify(net.error||'请连接扫雷所需的 RAM');return;}
+ if(memory[device.command]||memory[device.status])return;
+ const cell=memory[device.base+index]||0;
+ if((cell&32)||(!flag&&(cell&64)))return;
+ state.ram={...memory,[device.command]:index+(flag?65:1)};
+ if(!timer){
+  let budget=60000;
+  timer=setInterval(()=>{
+   const deadline=performance.now()+12;
+   try{
+    while(state.ram[device.command]&&budget>0&&performance.now()<deadline){
+     if(breakpoints.has(values.pc?.[0])){stop();break;}
+     const result=net.tick(state);state=result.state;values=result.values;ticks++;budget--;
+    }
+    if(!state.ram[device.command]||budget<=0){
+     stop();
+     if(!budget)notify('程序尚未确认输入，可切换到编辑视图单步检查。');
+    }
+    if(!timer){draw();renderTrace();}
+   }catch(e){stop();notify(e.message);draw();}
+  },16);
+  syncClock();
+ }
+ renderMineDevice();
+}
 function renderMineDevice(){
  const device=Game.mineDevice,memory=state.ram||{},grid=$('mines-grid');
- grid.replaceChildren();grid.className='large-board';
- $('mine-mode').textContent=mineFlags?'操作：插旗 / 取旗':'操作：揭格';
- $('mine-mode').onclick=()=>{mineFlags=!mineFlags;renderMineDevice();};
- for(let i=0;i<64;i++){
-  const cell=memory[device.base+i]||0,ended=memory[device.status];
-  const mark=ended===1&&(cell&128)?'✹':cell&64?'⚑':cell&32?(cell&15)||'·':'';
-  const b=button(String(mark),()=>{
-   if(net.error||!state.ram){notify(net.error||'请连接 RAM');return;}
-   if(state.ram[device.command])return;
-   state.ram={...state.ram,[device.command]:i+(mineFlags?65:1)};
-   if(!timer){
-    let budget=60000;
-    timer=setInterval(()=>{
-     const deadline=performance.now()+12;
-     try{
-      while(state.ram[device.command]&&budget>0&&performance.now()<deadline){
-       if(breakpoints.has(values.pc?.[0])){stop();break;}
-       const result=net.tick(state);state=result.state;values=result.values;ticks++;budget--;
-      }
-      if(!state.ram[device.command]||budget<=0){stop();if(!budget)notify('程序尚未确认输入，可单步检查。');}
-      if(!timer){draw();renderTrace();}
-     }catch(e){stop();notify(e.message);}
-    },16);
-    syncClock();
-   }
-   renderMineDevice();
-  },cell&32?'revealed':'covered');
-  b.disabled=!!ended||!!memory[device.command];b.setAttribute('aria-label','第 '+(1+Math.floor(i/8))+' 行第 '+(1+i%8)+' 列 '+(mark||'未揭开'));grid.append(b);
+ if(grid.className!=='large-board'){
+  grid.className='large-board';
+  grid.replaceChildren(...Array.from({length:64},(_,index)=>{
+   const b=button('',()=>submitMineMove(index,mineFlags));
+   b.oncontextmenu=e=>{e.preventDefault();submitMineMove(index,true);};
+   return b;
+  }));
  }
- $('mines-status').textContent=memory[device.status]===1?'踩雷':memory[device.status]===2?'胜利':memory[device.command]?'CPU 正在处理输入':'已揭开 '+(memory[device.count]||0)+' / 56';
+ const toggle=$('mine-mode');
+ toggle.textContent=mineFlags?'正在插旗':'插旗模式';
+ toggle.setAttribute('aria-pressed',String(mineFlags));
+ const ended=memory[device.status],pending=!!memory[device.command],hit=memory[device.exploded];
+ let flags=0;
+ for(const [i,b] of Array.from(grid.children).entries()){
+  const cell=memory[device.base+i]||0;
+  const revealed=!!(cell&32),flagged=!!(cell&64),mine=!!(cell&128),clue=cell&15;
+  if(flagged)flags++;
+  let mark='',description='未揭开',className=revealed?'revealed':'covered';
+  if(ended===1&&mine&&(!flagged||hit===i+1)){
+   const exploded=hit===i+1;
+   mark=exploded?'✹':'●';description=exploded?'踩中的雷':'地雷';className+=' mine-hit';
+  }else if(flagged){
+   const wrong=ended===1&&!mine;
+   mark=wrong?'×':'⚑';description=wrong?'错误标记':'已插旗';className+=wrong?' mine-hit':' mine-flag';
+  }else if(revealed){
+   mark=clue?String(clue):'·';description=clue?'邻雷 '+clue:'空地';
+   if(clue)className+=' mine-clue-'+clue;
+  }
+  b.className=className;b.textContent=mark;b.disabled=!!ended||pending;
+  b.setAttribute('aria-label','第 '+(1+Math.floor(i/8))+' 行第 '+(1+i%8)+' 列，'+description);
+ }
+ $('mine-flags').textContent='已标记 '+flags+' / 8';
+ const message=net.error||(!state.ram?'缺少与扫雷设备相连的 RAM':ended===1?'踩雷了':ended===2?'胜利！已找全 56 个安全格':pending?'CPU 正在处理输入':'已揭开 '+(memory[device.count]||0)+' / 56');
+ if($('mines-status').textContent!==message)$('mines-status').textContent=message;
 }
+$('mine-mode').onclick=()=>{mineFlags=!mineFlags;renderMineDevice();};
+$('mine-new-game').onclick=()=>{
+ const seed=doc.nodes.find(n=>n.id==='input'&&n.type==='IN32');
+ if(!seed){notify('需要保留 32 位种子输入 input');return;}
+ stop();seed.value=((seed.value||0)+1+Math.floor(Math.random()*65535))&65535;
+ mineFlags=false;compileCurrent();persist();draw();renderTrace();
+};
 const componentHelp={
  NAND:'两个输入都为 1 时，输出为 0。',
  CLOCK:'每推进一拍，CLK 在 0 和 1 之间切换。元件仍使用同一个全局时钟采样。',
@@ -1047,10 +1107,10 @@ document.addEventListener('keydown',e=>{
  if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();removeSelected();}
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?$('redo').click():$('undo').click();}
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();$('redo').click();}
- if(e.code==='Space'){e.preventDefault();step();}
+ if(e.code==='Space'&&e.target.tagName!=='BUTTON'&&(!level.workshop||workshopEditing)){e.preventDefault();step();}
 });
 $('back-circuit').onclick=()=>{
- if(!inspectionStack.length)return;const parent=inspectionStack.pop();openLevel(parent.levelId,false,true);doc=parent.doc;compileCurrent();state=parent.state;ticks=parent.ticks;records=parent.records;camera=parent.camera;selected=parent.selected;if(!net.error)values=net.evaluate(state).values;draw();renderTrace();notify('已返回上层电路');
+ if(!inspectionStack.length)return;const parent=inspectionStack.pop();openLevel(parent.levelId,false,true);if(level.workshop)setWorkshopView(true);doc=parent.doc;compileCurrent();state=parent.state;ticks=parent.ticks;records=parent.records;camera=parent.camera;selected=parent.selected;if(!net.error)values=net.evaluate(state).values;draw();renderTrace();notify('已返回上层电路');
 };
 // The component library holds snapshots, so editing a blueprint cannot silently
 // change circuits that already instantiate it.
@@ -1074,6 +1134,28 @@ function showWorld(){
  $('world').showModal();
 }
 $('home').onclick=showWorld;$('close-world').onclick=()=>$('world').close();
+$('workshop').onclick=()=>{
+ const works=Game.levels.filter(l=>l.workshop);
+ $('workshop-works').replaceChildren(...works.map(work=>{
+  const card=document.createElement('section');card.className='panel workshop-work';
+  const name=document.createElement('h3');name.textContent=work.title;
+  const description=document.createElement('p');description.textContent=work.text;
+  const play=button('试玩'+work.title,()=>{
+   $('workshop-dialog').close();
+   if(level===work){setWorkshopView(false);draw();}
+   else openLevel(work.id);
+   $('workshop-view').focus();
+  },'primary');
+  card.append(name,description,play);return card;
+ }));
+ $('workshop-dialog').showModal();
+};
+$('close-workshop').onclick=()=>$('workshop-dialog').close();
+$('workshop-view').onclick=()=>{
+ if(!level.workshop)return;
+ setWorkshopView(!workshopEditing);
+ if(workshopEditing)$('fit').click();else draw();
+};
 // ROM disassembly with live PC and breakpoints.
 const debug=document.createElement('div');debug.id='debugger';$('program-panel').append(debug);
 const display=document.createElement('canvas');display.id='cpu-screen';display.width=8;display.height=8;display.setAttribute('aria-label','RGB332 显存屏幕');$('program-panel').append(display);
@@ -1108,7 +1190,7 @@ function renderDebugger(){
  }
 }
 function renderScreen(){
- display.hidden=['mines','mines32'].includes(level.id);if(display.hidden)return;
+ display.hidden=usesMineDevice()||level.id==='mines';if(display.hidden)return;
  const ctx=display.getContext('2d');if(!ctx)return;
  if(level.machine==='symphony'){
   const ram=state.ram||{},mode=deviceScreen[0]||0,offset=(deviceScreen[1]||0)&65535;
