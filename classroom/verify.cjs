@@ -49,9 +49,54 @@ test('split/join preserve all 256 bytes',()=>{
 test('reference CPU satisfies the CPU construction challenge',()=>{
  const l=Game.levels.find(l=>l.id==='cpu'),d=l.build(),a=net(d);assert.equal(Game.levels.find(l=>l.id==='cpu-build').verify(a)[0].pass,true);
 });
+test('D flip-flop distinguishes clock edges from a combinational bypass',()=>{
+ const {execute}=require('./tools.cjs');
+ const level=Game.levels.find(l=>l.id==='dff-build'),d=level.build();
+ d.wires=[w('D','Q',0)];
+ assert(execute('test',{circuit:d,levelId:level.id}).passed<level.vectors.length);
+ d.nodes.push(n('hold','DELAY',350,120));
+ d.wires=[w('D','hold',0),w('hold','Q',0)];
+ assert.equal(execute('test',{circuit:d,levelId:level.id}).passed,level.vectors.length);
+ assert.equal(execute('step',{circuit:d,inputs:{D:1},state:{hold:0}}).state.hold,1);
+ assert.throws(()=>execute('step',{circuit:d,state:{hold:2}}),/寄存器状态无效/);
+});
+test('CM8 program challenges grade multiple inputs and reject empty programs',()=>{
+ const programs={
+  'cm8-loop':'LD 0\nloop: JZ done\nST 255\nSUB 1\nJMP loop\ndone: HLT',
+  'cm8-branch':'LD 0\nJZ zero\nLDI 89\nJMP print\nzero: LDI 78\nprint: ST 255\nHLT'
+ };
+ for(const [id,source] of Object.entries(programs)){
+  const l=Game.levels.find(x=>x.id===id),d=l.build();
+  assert(l.verify(net(d)).some(r=>!r.pass));
+  d.nodes.find(x=>x.id==='rom').program=C.assemble(source).words;
+  assert(l.verify(net(d)).every(r=>r.pass));
+ }
+});
 test('hierarchical gate-level CPU matches primitive CPU for 16 ticks',()=>{
  const a=net(Game.levels.find(l=>l.id==='cpu').build()),b=net(Game.levels.find(l=>l.id==='gate-cpu').build());let sa=a.initial(),sb=b.initial();
  assert(b.expandedCount>1000);for(let i=0;i<16;i++){const ra=a.tick(sa),rb=b.tick(sb);sa=ra.state;sb=rb.state;assert.deepEqual(rb.values.pc,ra.values.pc);assert.deepEqual(rb.values.acc,ra.values.acc);assert.deepEqual(rb.values.ctrl,ra.values.ctrl);assert.deepEqual(rb.writes.map(w=>w.value),ra.writes.map(w=>w.value));}
+});
+test('blueprints preserve nested modules, wire routes and legacy imports',()=>{
+ const d=Game.levels.find(l=>l.id==='gate-cpu').build();
+ Object.assign(d.wires[0],{points:[{x:180,y:105}],color:'purple',comment:'取指'});
+ const encoded=C.packBlueprint(d),restored=C.unpackBlueprint(JSON.parse(JSON.stringify(encoded)));
+ assert(JSON.stringify(encoded).length<JSON.stringify(d).length);
+ assert.deepEqual(restored,d);
+ assert.deepEqual(C.unpackBlueprint({version:2,circuit:d}),d);
+ const broken=C.clone(encoded);broken.circuit.nodes.find(n=>n.type==='CUSTOM').module=99999;
+ assert.throws(()=>C.unpackBlueprint(broken),/引用无效/);
+});
+test('clock source and screen device share synchronous writes',()=>{
+ const {execute}=require('./tools.cjs');
+ const d={nodes:[n('clock','CLOCK',0,0),n('address','IN8',0,90,'ADR',65),n('rgb','IN8',0,180,'RGB',224),n('screen','SCREEN8',300,0)],
+  wires:[w('clock','screen',2),w('address','screen',0),w('rgb','screen',1)]};
+ const first=execute('step',{circuit:d});
+ assert.equal(first.state.clock,1);
+ assert.equal(first.state.screen[1],0);
+ const second=execute('step',{circuit:d,state:first.state});
+ assert.equal(second.state.clock,0);
+ assert.equal(second.state.screen[1],224);
+ assert.deepEqual(second.values.screen,[224]);
 });
 test('RAM read/write and address isolation',()=>{
  const l=Game.levels.find(l=>l.id==='memory'),d=l.build();d.nodes.push(n('ram','RAM8',400,100));d.wires=[w('ADR','ram',0),w('DATA','ram',1),w('WE','ram',2),w('ram','Q',0)];const a=net(d);let s=a.initial();for(const v of l.vectors){const r=a.tick(s,v.input);s=r.state;assert.deepEqual([r.inputs('Q')[0]],v.expected);}
@@ -84,8 +129,31 @@ test('UI navigation, campaign verification, packaging and restoration events',()
  const elements=new Map(),store=new Map();
  const context={Circuit:C,Game,console,setTimeout:()=>0,clearTimeout(){},setInterval:()=>1,clearInterval(){},confirm:()=>true,Blob,URL:{createObjectURL:()=>'',revokeObjectURL(){}},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)},document:{body:new Element(),getElementById:id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);},createElement:t=>new Element(t),createElementNS:(_,t)=>new Element(t),addEventListener(){}}};
  vm.createContext(context);vm.runInContext(fs.readFileSync(__dirname+'/dist/app.js','utf8'),context);
+ assert.equal(vm.runInContext("locked(Game.guidedPath[1])",context),true);
+ vm.runInContext("doc.nodes.push(Game.node('n','NAND',450,105));doc.wires=[Game.wire('A','n',0),Game.wire('B','n',1),Game.wire('n','Q',0)];edit();",context);
+ elements.get('test').click();
+ assert(vm.runInContext('completed.nand&&library.some(p=>p.courseId==="nand")',context));
+ elements.get('next-level').click();
+ assert.equal(vm.runInContext('level.id',context),'not');
+ vm.runInContext(`{
+  const model=Game.levels.find(l=>l.id==='gate-cpu').build();
+  const origins={pc:'register8',acc:'register8',inc:'adder8',branch:'mux8',result:'mux8',alu:'alu-cpu',ctrl:'control-build'};
+  for(const p of model.nodes.filter(n=>origins[n.id])){
+   const id=origins[p.id];
+   if(!completed[id])library.push({...p.spec,courseId:id});
+   completed[id]=true;
+  }
+  openLevel('cpu-build',true);doc.wires=model.wires;edit();
+ }`,context);
+ assert(vm.runInContext("!net.error && doc.nodes.find(n=>n.id==='pc').type==='CUSTOM' && !courseViolation()",context));
+ elements.get('test').click();
+ elements.get('next-level').click();
+ assert(vm.runInContext("level.id==='cm8-loop' && doc.nodes.find(n=>n.id==='pc').type==='CUSTOM' && !net.error",context));
+ vm.runInContext("guided=false;library=[];",context);
  vm.runInContext("openLevel('cpu'); for(let i=0;i<12;i++)step();",context);assert.equal(elements.get('terminal').textContent,'ABCD');
  vm.runInContext("openLevel('cpu-build'); doc=Game.levels.find(l=>l.id==='cpu').build();edit();",context);elements.get('test').click();assert.equal(vm.runInContext('completed["cpu-build"]',context),true);
+ vm.runInContext("openLevel('cm8-loop');",context);
+ assert(vm.runInContext('!net.error && state.ram.length===256 && doc.nodes.find(n=>n.id==="rom").program[0]===15*256',context));
  vm.runInContext("openLevel('full');doc.nodes.find(n=>n.id==='p').type='AND';edit();",context);elements.get('package').click();elements.get('package-name').value='FA';elements.get('save-package').click();assert.equal(JSON.parse(store.get('cm-library')).length,1);
  elements.get('home').click();assert.equal(elements.get('world').open,true);
 });

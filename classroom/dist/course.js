@@ -7,8 +7,8 @@ const chapters=['01 逻辑门','02 数据通路','03 总线与算术','04 记忆
 function logic(id,title,chapter,inputWidths,outputWidths,text,allowed,fn,samples){
  const inputs=Object.keys(inputWidths),outputs=Object.keys(outputWidths);
  const build=()=>({nodes:[
-  ...inputs.map((id,i)=>node(id,inputWidths[id]===1?'IN':'IN8',75,80+110*i,id)),
-  ...outputs.map((id,i)=>node(id,outputWidths[id]===1?'OUT':'OUT8',1030,90+110*i,id))
+  ...inputs.map((id,i)=>node(id,inputWidths[id]===1?'IN':'IN'+inputWidths[id],75,80+110*i,id)),
+  ...outputs.map((id,i)=>node(id,outputWidths[id]===1?'OUT':'OUT'+outputWidths[id],1030,90+110*i,id))
  ],wires:[]});
  const level={id,title,chapter:chapters[chapter],tag:'搭建与验证',inputs,outputs,allowed,text,build,expect:fn};
  if(samples)level.vectors=samples.map(row=>({input:Object.fromEntries(inputs.map((id,i)=>[id,row[i]])),expected:fn(row)}));
@@ -124,14 +124,111 @@ function speedRound(id,title,radix){
   drill:questions,build:()=>({nodes:[node('A','IN',80,80,'A'),node('Q','OUT',630,80,'Q')],wires:[wire('A','Q',0)]})};
 }
 Game.levels.push(speedRound('binary-race','二进制速答',2),speedRound('hex-race','十六进制速答',16),speedRound('gate-race','逻辑门速答',0));
+const cpu=Game.levels.find(l=>l.id==='cpu');
+function cm8Program(id,title,text,examples){
+ const program='; 将输出写入地址 255\nHLT';
+ return {id,title,chapter:'06 程序与应用',tag:'CM8 · 汇编实验',text,program,build(){
+  const doc=cpu.build();
+  doc.nodes.find(n=>n.id==='rom').program=Circuit.assemble(program).words;
+  return doc;
+ },verify(net){
+  return examples.map(([input,expected])=>{
+   let state=net.initial();const actual=[];
+   if(!Array.isArray(state.ram))throw Error('请保留地址为 0～255 的 RAM');
+   state.ram[0]=input;
+   for(let ticks=0;ticks<128;ticks++){
+    const step=net.tick(state);state=step.state;
+    for(const write of step.writes)if(write.id==='ram'&&write.address===255)actual.push(write.value);
+    if(step.values.ctrl?.[6]===0)break;
+   }
+   return {input:{'RAM[0]':input},expected,actual,pass:actual.length===expected.length&&actual.every((v,i)=>v===expected[i])};
+  });
+ }};
+}
+const aluSamples=[0,1,2,3,4,5,6,7,255].flatMap(op=>[[0,0,op],[1,255,op],[170,85,op],[128,129,op],[255,8,op]]);
+const controlSamples=Array.from({length:16},(_,i)=>i).concat(16,127,128,255).flatMap(op=>[[op*256+165,0],[op*256+42,255]]);
+Game.levels.push(
+ sequence('sr-latch','同步 SR 锁存器',{S:1,R:1},{Q:1},'每拍采样。R 为 1 时清零，S 为 1 且 R 为 0 时置位，两者为 0 时保持。',['DELAY',...gates],
+  [[[0,0],[0]],[[1,0],[1]],[[0,0],[1]],[[1,1],[0]],[[0,0],[0]],[[1,0],[1]],[[0,1],[0]]]),
+ sequence('dff-build','D 触发器',{D:1},{Q:1},'每拍将稳定的 D 存到 Q。时钟推进前，改变 D 不影响 Q。',['DELAY',...gates],
+  [[[0],[0]],[[1],[1]],[[1],[1]],[[0],[0]],[[1],[1]],[[0],[0]]]),
+ logic('or8-build','八位逻辑或',2,{A:8,B:8},{Q:8},'逐位判断 A、B 对应位是否至少一个为 1。',bytes,([a,b])=>[a|b],pairs),
+ logic('alu-cpu','CM8 算术逻辑单元',3,{A:8,B:8,OP:8},{Q:8},'操作码 0～5 依次执行传送 B、加、减、与、或、异或。其余操作码输出 0。',bytes,Circuit.types.ALU8.evaluate,aluSamples),
+ logic('control-build','CM8 指令译码',3,{IR:16,ACC:8},{IMM:8,OP:8,WRITE:1,BRANCH:1,STORE:1,LOAD:1,RUN:1},
+  'IR 高字节为指令编号，低字节直出 IMM。2～6 对应 ALU 操作 1～5，其余为 0。1～7 写回，7 读 RAM，8 写 RAM，9 总是跳转，10 在 ACC 为 0 时跳转，15 停机。',
+  [...bytes,'SPLIT16','EQ8','BIT'],Circuit.types.CONTROL.evaluate,controlSamples),
+ cm8Program('cm8-loop','递减循环','从 RAM[0] 读取 n，向终端输出 n 到 1 的序列。n 为 0 时终端保持空白。',[[0,[]],[1,[1]],[4,[4,3,2,1]],[7,[7,6,5,4,3,2,1]]]),
+ cm8Program('cm8-branch','按输入选择分支','读取 RAM[0]。若为 0，向终端写入 78，否则写入 89。结果只能写一次。',[[0,[78]],[1,[89]],[128,[89]],[255,[89]]])
+);
+for(const id of ['alu-cpu','control-build'])Game.levels.find(l=>l.id===id).chapter='05 计算机';
+const isComputer=Game.isComputer;
+Game.isComputer=l=>l.id==='cm8-loop'||l.id==='cm8-branch'||isComputer(l);
 const order=['nand','not','constant','and','or','nor','and3','or3','xor','xnor','odd','majority','two-of-four','mux','demux','decode2','decode3','onehot','mux4','half','full','count4','not8','and8','nand8','xor-byte','mux8','adder8','carry8','subtract8','negate','equal8','unsigned','signed','shift8','lsr','asr','mod4','parity8','register','delay2','toggle','edge','register8','counter','pc-build','sum8','memory','alu-build','cpu','cpu-build','gate-cpu','display','mines','overture','wire-registers','wire-immediate','wire-pc','o8-binary','o8-echo','o8-double','o8-branch','o8-repeat','s32','wire-s32-immediate','wire-s32-io','s32-cmp','wire-s32-ram','s32-memory','wire-s32-disk','s32-stack','wire-s32-stack','s32-function','capitalize','popcount','leading','triangle','multiply','divide','sort','rng','mines32','sandbox'];
+order.splice(order.indexOf('register'),0,'sr-latch','dff-build');
+order.splice(order.indexOf('xor-byte'),0,'or8-build');
+order.splice(order.indexOf('cpu'),0,'alu-cpu','control-build');
+order.splice(order.indexOf('display'),0,'cm8-loop','cm8-branch');
 order.splice(order.indexOf('memory'),0,'shared-bus');
 order.splice(order.indexOf('mux'),0,'gate-race','binary-race','hex-race');
 const rank=id=>{const i=order.indexOf(id);return i<0?order.length-1:i;};
 Game.levels.sort((a,b)=>rank(a.id)-rank(b.id));
 Game.isGraded=l=>!!(l.expect||l.sequence||l.vectors||l.verify||l.drill);
+const byId=new Map(Game.levels.map(l=>[l.id,l]));
+const guided=[
+ ['nand','NAND','仅当 A、B 都为 1 时，Q 为 0。',['NAND']],
+ ['not','NOT','Q 输出与 A 相反的位。',['NAND']],
+ ['and','AND','仅当 A、B 都为 1 时，Q 为 1。',['NAND'],['not']],
+ ['or','OR','A、B 至少有一个为 1 时，Q 为 1。',['NAND'],['not','and']],
+ ['xor','XOR','A、B 不同时，Q 为 1。',['NAND'],['not','and','or']],
+ ['mux','一位选择器','S 为 0 时选择 A，为 1 时选择 B。',['NAND'],['not','and','or']],
+ ['half','半加器',null,['NAND'],['and','xor']],
+ ['full','全加器','将 A、B、Cin 相加。S 输出低位，C 输出进位。',['NAND'],['and','or','xor','half']],
+ ['decode2','2–4 译码器',null,['NAND'],['not','and','or']],
+ ['decode3','3–8 译码器',null,['NAND'],['not','and','or','decode2']],
+ ['not8','八位反相','Q 的八个位分别与 A 对应位相反。',['NAND','SPLIT8','JOIN8'],['not']],
+ ['and8','八位逻辑与','Q 的每一位仅在 A、B 对应位都为 1 时亮起。',['NAND','SPLIT8','JOIN8'],['and']],
+ ['or8-build','八位逻辑或',null,['NAND','SPLIT8','JOIN8'],['or']],
+ ['xor-byte','八位异或',null,['NAND','SPLIT8','JOIN8'],['xor']],
+ ['mux8','八位选择器','S 为 0 时输出 A，为 1 时输出 B。',['NAND','SPLIT8','JOIN8'],['not','and','or','mux']],
+ ['adder8','八位加法器','输出 A 与 B 相加后的低八位。',['NAND','SPLIT8','JOIN8','BIT'],['and','or','xor','half','full']],
+ ['subtract8','八位减法器','输出 A 减 B 后的低八位。',['NAND','SPLIT8','JOIN8','CONST','BIT'],['not8','adder8']],
+ ['sr-latch','SR 锁存器',null,['NAND','DELAY'],['not','and','or']],
+ ['dff-build','D 触发器',null,['NAND'],['not','and','or','sr-latch']],
+ ['register','一位寄存器','EN 为 1 时在下一拍保存 D，EN 为 0 时保持上一次的值。',['NAND'],['not','and','or','mux','dff-build']],
+ ['register8','八位寄存器',null,['SPLIT8','JOIN8'],['register']],
+ ['pc-build','八位计数器','EN 为 1 时每拍加一，到 255 后回到 0。EN 为 0 时保持。',['CONST'],['register8','adder8']],
+ ['memory','字节存储器','写使能为 1 时将 DATA 保存到 ADR。Q 随地址变化，显示该地址当前的值。',['RAM8']],
+ ['alu-cpu','CM8 ALU',null,['NAND','SPLIT8','JOIN8','CONST','BIT'],['not','and','or','not8','and8','or8-build','xor-byte','mux8','adder8','subtract8']],
+ ['control-build','CM8 控制器',null,['NAND','SPLIT16','SPLIT8','JOIN8','CONST','BIT'],['not','and','or','decode2','decode3','mux8']],
+ ['cpu-build','CM8 CPU','接通程序计数、取指、译码、运算和写回。载入的程序应在 16 拍之内依次输出 A、B、C、D、E。',['ROM16','RAM8','CONST','BIT','OUT8'],['register8','alu-cpu','control-build','mux8','adder8','pc-build']],
+ ['cm8-loop'],['cm8-branch'],['s32'],['s32-stack'],['s32-function']
+];
+for(const [id,moduleName,goal,parts,modules=[]] of guided){
+ const level=byId.get(id);
+ if(parts)Object.assign(level,{courseName:moduleName,courseGoal:goal||level.text,courseParts:parts,courseModules:modules});
+}
+byId.get('full').courseBuild=logic('full','全加器',1,{A:1,B:1,Cin:1},{S:1,C:1},'',[],null).build;
+byId.get('register').courseBuild=logic('register','一位寄存器',3,{D:1,EN:1},{Q:1},'',[],null).build;
+byId.get('cpu-build').courseSubstitutions={REG8:'register8',ALU8:'alu-cpu',CONTROL:'control-build',MUX8:'mux8',ADD8:'adder8'};
+for(const id of ['sr-latch','dff-build','register8','register','pc-build'])byId.get(id).checkBeforeClock=true;
+byId.get('pc-build').verify=net=>{
+ let state=net.initial();
+ const run=(cycles,input)=>{
+  const before=net.evaluate(state,input).inputs('Q')[0];
+  let result;
+  for(let i=0;i<cycles;i++){result=net.tick(state,input);state=result.state;}
+  return [before,result.inputs('Q')[0]];
+ };
+ return [[2,1,[0,2]],[1,0,[2,2]],[254,1,[2,0]],[1,1,[0,1]]].map(([cycles,en,expected])=>{
+  const actual=run(cycles,{EN:en});
+  return {input:{EN:en,周期:cycles},expected,actual,pass:actual.every((v,i)=>v===expected[i])};
+ });
+};
+Game.guidedPath=guided.map(([id])=>byId.get(id));
 Game.prerequisite=l=>{
  if(l.id==='sandbox')return null;
+ const primary=Game.guidedPath.indexOf(l);
+ if(primary>=0)return Game.guidedPath.slice(0,primary).reverse().find(Game.isGraded)||null;
  const i=Game.levels.indexOf(l);
  return Game.levels.slice(0,i).reverse().find(Game.isGraded)||null;
 };

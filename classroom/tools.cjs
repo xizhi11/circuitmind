@@ -20,12 +20,12 @@ function execute(tool,request){
   for(const key of Object.keys(current)){
    if(!Object.hasOwn(state,key))throw Error('state 缺少 '+key);
    const value=state[key],initial=current[key];
-   if(Array.isArray(initial)){if(!Array.isArray(value)||value.length!==256||value.some(v=>!Number.isInteger(v)||v<0||v>255))throw Error('RAM 状态无效');}
+   if(Array.isArray(initial)){if(!Array.isArray(value)||value.length!==initial.length||value.some(v=>!Number.isInteger(v)||v<0||v>255))throw Error('字节存储状态无效');}
    else if(initial&&typeof initial==='object'){
     if(!value||typeof value!=='object'||Array.isArray(value)||Object.entries(value).some(([address,byte])=>!/^(0|[1-9]\d*)$/.test(address)||Number(address)>65535||!Number.isInteger(byte)||byte<0||byte>255))throw Error('32 位机器内存快照无效');
    }else {
     let scope=circuit,node;for(const part of key.split('/')){node=scope.nodes.find(n=>n.id===part);if(node?.type==='CUSTOM')scope=node.spec.circuit;}
-    if(!Number.isInteger(value)||value<0||value>(node?.type==='REG'?1:node?.type==='REG32'?0xffffffff:255))throw Error('寄存器状态无效');
+    if(!Number.isInteger(value)||value<0||value>2**C.definition(node).outputs[0].width-1)throw Error('寄存器状态无效');
    }
   }
   current=C.clone(state);
@@ -41,7 +41,7 @@ function execute(tool,request){
  if(tool==='trace'){
   if(!nodes.has(request.target))throw Error('target 元件不存在');
   const visited=new Set(),wires=new Set();
-  function walk(id){if(visited.has(id))return;visited.add(id);if(['REG','REG8','REG32'].includes(nodes.get(id).type))return;for(const w of circuit.wires.filter(w=>w.to===id)){wires.add(w.id);walk(w.from);}}
+  function walk(id){if(visited.has(id))return;visited.add(id);const d=C.definition(nodes.get(id));if(d.stateful&&!d.memory)return;for(const w of circuit.wires.filter(w=>w.to===id)){wires.add(w.id);walk(w.from);}}
   walk(request.target);return {valid:true,target:request.target,nodes:[...visited],wires:[...wires],boundary:'寄存器停止追踪；自定义元件按外部接口追踪，内部依赖可能被保守包含'};
  }
  if(tool==='test'){
@@ -57,14 +57,23 @@ function execute(tool,request){
    if(![...(level.inputs||[]),...(level.outputs||[])].every(id=>nodes.has(id)))throw Error('缺少关卡输入输出端口');
   }
   if(!Array.isArray(cases)||!cases.length||cases.length>256)throw Error('cases 需要 1 至 256 项');
+  let previous;
   const results=cases.map(test=>{
    // Reuse input validation, but execute the same compiled graph and clock state.
    for(const [id,value] of Object.entries(test.input||{})){const n=nodes.get(id);if(!n||!['IN','IN8','IN16','IN32'].includes(n.type)||!Number.isInteger(value)||value<0||value>2**C.definition(n).outputs[0].width-1)throw Error('测试输入无效');}
-   const r=clocked?net.tick(current,test.input):net.evaluate(current,test.input);if(clocked)current=r.state;
    const expected=Array.isArray(test.expected)?Object.fromEntries((level?.outputs||[]).map((id,i)=>[id,test.expected[i]])):test.expected;
    if(!expected||typeof expected!=='object'||!Object.keys(expected).length)throw Error('expected 必须包含输出元件及期望值');
-   const actual={};for(const id of Object.keys(expected)){const n=nodes.get(id);if(!n||C.definition(n).outputs.length||!Number.isInteger(expected[id]))throw Error('测试输出无效');actual[id]=r.inputs(id)[0];}
-   return {input:test.input,expected,actual,pass:Object.entries(expected).every(([id,v])=>actual[id]===v)};
+   const ids=Object.keys(expected);
+   for(const id of ids){const n=nodes.get(id);if(!n||C.definition(n).outputs.length||!Number.isInteger(expected[id]))throw Error('测试输出无效');}
+   const read=r=>Object.fromEntries(ids.map(id=>[id,r.inputs(id)[0]]));
+   const timing=level?.checkBeforeClock?{
+    before:read(net.evaluate(current,test.input)),
+    expectedBefore:previous||Object.fromEntries(ids.map(id=>[id,0]))
+   }:{};
+   const r=clocked?net.tick(current,test.input):net.evaluate(current,test.input);if(clocked)current=r.state;
+   const actual=read(r);previous=expected;
+   const pass=ids.every(id=>actual[id]===expected[id]&&(!timing.before||timing.before[id]===timing.expectedBefore[id]));
+   return {input:test.input,expected,actual,...timing,pass};
   });
   return {valid:true,clocked,passed:results.filter(r=>r.pass).length,total:results.length,cases:results};
  }
