@@ -46,7 +46,36 @@
       <div><span id="tag" class="eyebrow"></span><p id="description"></p></div>
       <div class="actions mission-actions"><button id="test" class="primary">运行测试</button><button id="next-level" hidden>下一关</button><button id="workshop-view" hidden>编辑电路与汇编</button></div>
     </section>
-    <section id="workshop-play" aria-label="工坊试玩" hidden></section>
+    <section id="workshop-play" aria-label="工坊试玩" hidden>
+      <section id="maze-panel" aria-labelledby="maze-heading" hidden>
+        <div class="maze-controls">
+          <label for="maze-map">地图 <select id="maze-map"></select></label>
+          <div class="actions">
+            <button type="button" id="maze-run" class="primary">运行</button>
+            <button type="button" id="maze-step">单步</button>
+            <button type="button" id="maze-reset">复位</button>
+          </div>
+        </div>
+        <div class="maze-layout">
+          <div>
+            <h3 id="maze-heading">迷宫</h3>
+            <div id="maze-grid" role="img" aria-label="迷宫机器人棋盘"></div>
+            <p class="muted">箭头是机器人，◎ 是出口。</p>
+          </div>
+          <div class="maze-probe">
+            <h3>墙壁传感器</h3>
+            <div id="maze-sensors" aria-label="前、左、右传感器"></div>
+            <dl>
+              <div><dt>IN</dt><dd id="maze-input" class="mono">—</dd></div>
+              <div><dt>最近 OUT</dt><dd id="maze-output">—</dd></div>
+              <div><dt>下一条指令</dt><dd id="maze-instruction" class="mono">—</dd></div>
+            </dl>
+            <p id="maze-progress" class="muted"></p>
+          </div>
+        </div>
+        <p id="maze-status" role="status"></p>
+      </section>
+    </section>
     <section class="panel" id="drill-panel" hidden><button id="drill-start">开始一轮</button><p id="drill-question" aria-live="polite"></p><input id="drill-answer" aria-label="答案" autocomplete="off" spellcheck="false" hidden><button id="drill-submit" hidden>提交</button></section>
     <section class="editor" aria-label="电路画布">
       <div class="toolbar">

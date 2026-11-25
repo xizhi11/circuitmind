@@ -62,7 +62,7 @@ const source=program(false),workshopSource=program(true);
 const level={id:'mines32',title:'用自己的 CPU 玩扫雷',chapter:'09 程序作品',machine:'symphony',tag:'汇编应用 · 随机扫雷',
  text:'棋盘由程序在首次揭格时布雷。可插旗、取消旗子、展开空白区域。打开全部 56 个安全格获胜。每次操作会运行到 CPU 处理完这条输入，单步可观察程序。',
  program:source,build:()=>minefield(source)};
-const workshop={...level,id:'workshop-mines',title:'扫雷',chapter:'创意工坊',tag:'创意工坊 · CPU 游戏',workshop:true,
+const workshop={...level,id:'workshop-mines',title:'扫雷',chapter:'创意工坊',tag:'创意工坊 · CPU 游戏',workshop:'mines',
  text:'8 × 8 棋盘，八颗地雷。第一步会展开一片安全区，翻开全部安全格即可获胜。',
  program:workshopSource,build:()=>minefield(workshopSource)};
 Game.levels.splice(Game.levels.findIndex(l=>l.id==='sandbox'),0,level,workshop);

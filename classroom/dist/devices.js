@@ -3,14 +3,16 @@
 // Each exercise attaches the same two data ports and the output strobe.
 // Only the guest program can issue commands; verification repeats the device
 // from its initial state with a fresh processor for every scenario.
+const mazeMaps=[
+ {label:'地图 1 · 绕墙',cells:['########','#S..#..#','###.#.G#','#......#','########']},
+ {label:'地图 2 · 岔路',cells:['########','#S.#...#','#..#.#G#','#....#.#','########']},
+ {label:'地图 3 · 回廊',cells:['########','#S.....#','#####..#','#G....##','########']}
+];
+const mazeCycleLimit=5000;
 function maze(index){
- const maps=[
-  ['########','#S..#..#','###.#.G#','#......#','########'],
-  ['########','#S.#...#','#..#.#G#','#....#.#','########'],
-  ['########','#S.....#','#####..#','#G....##','########']
- ];
- const map=maps[index],start=map.findIndex(row=>row.includes('S'));
- let x=map[start].indexOf('S'),y=start,dir=1,moves=0,done=false,pass=false;
+ const map=mazeMaps[index].cells,start=map.findIndex(row=>row.includes('S'));
+ let x=map[start].indexOf('S'),y=start,dir=1,moves=0,done=false,pass=false,lastCommand=null,failure='';
+ const visited=new Set([y*map[0].length+x]);
  const directions=[[0,-1],[1,0],[0,1],[-1,0]];
  function wall(direction){
   const [dx,dy]=directions[(direction+4)%4];return map[y+dy]?.[x+dx]==='#';
@@ -18,12 +20,16 @@ function maze(index){
  return {
   get input(){return Number(wall(dir))|(Number(wall(dir-1))<<1)|(Number(wall(dir+1))<<2);},
   get done(){return done;},get pass(){return pass;},
+  snapshot(){return {map,x,y,dir,moves,lastCommand,visited,failure};},
   write(v){
+   if(done)return;
+   lastCommand=v;
    if(v===0)dir=(dir+3)%4;
    else if(v===2)dir=(dir+1)%4;
-   else if(v===1&&!wall(dir)){x+=directions[dir][0];y+=directions[dir][1];}
-   else{done=true;return;}
+   else if(v===1&&!wall(dir)){x+=directions[dir][0];y+=directions[dir][1];visited.add(y*map[0].length+x);}
+   else{done=true;failure=v===1?'前方有墙，机器人撞墙了。':'OUT 只能写入 0、1 或 2。';return;}
    moves++;pass=map[y][x]==='G';done=pass||moves>=192;
+   if(done&&!pass)failure='达到 192 个动作，机器人还没有到达出口。';
   },
   describe(){return map.map((row,i)=>i===y?row.slice(0,x)+'↑→↓←'[dir]+row.slice(x+1):row).join('\n')+'\n动作 '+moves;}
  };
@@ -76,11 +82,26 @@ function exercise(id,title,text,create,count,cycles,machine){
   verify(net){const steps=trials(net);let r;do{r=steps.next();}while(!r.done);return r.value;}};
 }
 const levels=[
- exercise('robot-maze','让机器人找到出口','O8 的 IN 低三位依次表示前、左、右有墙。向 OUT 写 0 左转、1 前进、2 右转。机器人从 S 朝东出发，到达 G。碰墙或超过 192 个动作结束。',maze,3,5000,'overture'),
+ exercise('robot-maze','让机器人找到出口','O8 的 IN 低三位依次表示前、左、右有墙。向 OUT 写 0 左转、1 前进、2 右转。机器人从 S 朝东出发，到达 G。碰墙或超过 192 个动作结束。',maze,mazeMaps.length,mazeCycleLimit,'overture'),
  exercise('binary-search','二分猜一个字节','每次从 OUT 发出猜测，下一拍的 IN 在猜大时为 1，猜小时为 0。命中立即结束。对 0～255 的未知数至多猜九次。',search,4,500,'symphony'),
  exercise('nim','最后一张牌','IN 为剩余牌数，从 OUT 写 1～3 取牌。取到最后一张输；对手取牌后，IN 自动更新。',cards,3,500,'symphony'),
  exercise('tower','汉诺塔与递归','IN 给出盘数 2～4。三根柱编号为 0、1、2。输出 (起点 × 16 + 终点) 表示移动一只盘。用最少步数把全部盘从 0 移到 2。',towers,3,4000,'symphony')
 ];
+const mazeDemo=[
+ '; 右手贴墙。右侧畅通时先右转，再前进。',
+ 'loop: MOV R1, IN','IMM 4','MOV R2, R0','AND','IMM right','JZ',
+ '; 右边有墙时，检查前方。正前方有墙就左转。',
+ 'MOV R1, IN','IMM 1','MOV R2, R0','AND','IMM forward','JZ',
+ 'IMM 0','MOV OUT, R0','IMM loop','JMP',
+ 'right: IMM 2','MOV OUT, R0',
+ 'forward: IMM 1','MOV OUT, R0','IMM loop','JMP'
+].join('\n');
+levels.push({
+ ...levels[0],id:'workshop-robot',title:'迷宫机器人',chapter:'创意工坊',tag:'创意工坊 · 外设控制',
+ workshop:'maze',maps:mazeMaps.map(map=>map.label),cycleLimit:mazeCycleLimit,program:mazeDemo,
+ text:'运行 Overture 汇编，让 CPU 读取墙壁传感器并控制机器人找到出口。',
+ build:()=>Game.overture.machine(mazeDemo)
+});
 Game.levels.splice(Game.levels.findIndex(l=>l.id==='mines32'),0,...levels);
 function budget(machine,examples,limit){
  const cpu=Game[machine],program=examples[0][0],base=cpu.machine(program);

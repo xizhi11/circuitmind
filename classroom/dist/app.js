@@ -9,7 +9,7 @@ let viewport={width:1280,height:760},draggedPart=null;
 let inspectionStack=[],multi=new Set(),clipboard=null;
 let completed={},saved={},library=[],breakpoints=new Set();
 let storageDatabase=null;
-let mineFlags=false,deviceScreen=[],pendingKeys=[],peripheral=null,workshopEditing=false;
+let mineFlags=false,deviceScreen=[],pendingKeys=[],peripheral=null,workshopEditing=false,mazeMapIndex=0;
 let round=null;
 let guided=true,detailTab='component',paletteCategory=null,traceSignals=[];
 const detailScreens={component:'detail-ports',verify:'detail-tests',signals:'detail-trace',program:'detail-code'};
@@ -90,8 +90,8 @@ function compileCurrent(reset=true){
   }
   return [];
  }).slice(0,24);
- if(reset){ticks=0;records=[];terminal='';deviceScreen=[];pendingKeys=[];peripheral=level.createDevice?.(0)??null;state=net.error?{}:net.initial();}
- if(!net.error)values=net.evaluate(state).values;else values={};
+ if(reset){ticks=0;records=[];terminal='';deviceScreen=[];pendingKeys=[];peripheral=level.createDevice?.(level.workshop==='maze'?mazeMapIndex:0)??null;state=net.error?{}:net.initial();}
+ if(!net.error)values=net.evaluate(state,peripheral?{input:peripheral.input}:{}).values;else values={};
 }
 function edit(){stop();focused=null;testCases=[];testIndex=-1;compileCurrent();persist();draw();renderTests();renderTrace();}
 function starterCircuit(){
@@ -115,10 +115,11 @@ function setWorkshopView(editing){
  if(playing)document.body.classList.add('workshop-play');
  else document.body.classList.remove('workshop-play');
  $('workshop-play').hidden=!playing;
+ $('maze-panel').hidden=level.workshop!=='maze';
  const toggle=$('workshop-view');
  toggle.hidden=!level.workshop;
  toggle.textContent=playing?'编辑电路与汇编':'返回试玩';
- const host=$(playing?'workshop-play':'program-panel');
+ const host=$(playing&&level.workshop==='mines'?'workshop-play':'program-panel');
  const panel=$('mines-panel');
  if(panel.parentElement!==host)host.append(panel);
  if(editing&&level.workshop)showDetails('program');
@@ -126,6 +127,13 @@ function setWorkshopView(editing){
 function openLevel(id,fresh=false,keepContext=false){
  if(!keepContext)inspectionStack=[];multi.clear();
  stop();round=null;level=Game.levels.find(l=>l.id===id)||Game.levels[0];
+ mazeMapIndex=0;
+ if(level.workshop==='maze'){
+  $('maze-map').replaceChildren(...level.maps.map((name,index)=>{
+   const option=document.createElement('option');option.textContent=name;option.value=index;return option;
+  }));
+  $('maze-map').value='0';
+ }
  doc=clone(!fresh&&saved[level.id]?saved[level.id]:starterCircuit());
  const machine=level.id.startsWith('cm8-')?'cm8':level.machine;
  if(machine&&!level.workshop&&(!saved[level.id]||fresh&&machine==='cm8')&&!level.id.startsWith('wire-')&&saved['machine-'+machine]){
@@ -159,9 +167,9 @@ function openLevel(id,fresh=false,keepContext=false){
  const mines=usesMineDevice();
  $('mines-panel').hidden=!mines&&level.id!=='mines';
  $('mine-mode').hidden=!mines;mineFlags=false;
- $('mine-help').hidden=!level.workshop;
- $('mine-flags').hidden=!level.workshop;
- $('mine-new-game').hidden=!level.workshop;
+ $('mine-help').hidden=level.workshop!=='mines';
+ $('mine-flags').hidden=level.workshop!=='mines';
+ $('mine-new-game').hidden=level.workshop!=='mines';
  $('mine-heading').textContent=mines?'扫雷 · 8 × 8':'CPU 屏幕 · 3 × 3';
  setWorkshopView(false);
  renderNav();renderPalette();$('fit').click();renderTests();renderTrace();
@@ -459,7 +467,10 @@ function wireColor(w,target,width){
  return width>1?'cyan':'purple';
 }
 function draw(){
- if(level.workshop&&!workshopEditing){renderMineDevice();return;}
+ if(level.workshop&&!workshopEditing){
+  if(level.workshop==='maze')renderMaze();else if(usesMineDevice())renderMineDevice();
+  return;
+ }
  $('back-circuit').hidden=!inspectionStack.length;
  scene.replaceChildren();scene.setAttribute('transform',`translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
  const nodes=new Map(doc.nodes.map(n=>[n.id,n])),traced=new Set(),visited=new Set();
@@ -558,6 +569,58 @@ function renderMines(){
  }
  $('mines-status').textContent=memory[250]===1?'CPU 状态：踩雷，程序停机':memory[250]===2?'CPU 状态：胜利，程序停机':'已揭开 '+(memory[252]||0)+' / 8 · 每个输入需多个周期处理';
 }
+function mazeCycleLimitReached(){
+ return level.workshop==='maze'&&ticks>=level.cycleLimit;
+}
+function renderMaze(){
+ if(!peripheral)return;
+ const {map,x,y,dir,moves,lastCommand,visited,failure}=peripheral.snapshot();
+ const grid=$('maze-grid'),columns=map[0].length;
+ grid.style.setProperty('--maze-columns',columns);
+ const tiles=[];
+ for(const [row,line] of map.entries())for(const [column,type] of [...line].entries()){
+  const tile=document.createElement('span');tile.className='maze-tile';tile.setAttribute('aria-hidden','true');
+  if(row===y&&column===x){tile.className+=' maze-robot';tile.textContent='↑→↓←'[dir];}
+  else if(type==='#')tile.className+=' maze-wall';
+  else if(type==='G'){tile.className+=' maze-goal';tile.textContent='◎';}
+  else if(visited.has(row*columns+column)){tile.className+=' maze-trail';tile.textContent='·';}
+  tiles.push(tile);
+ }
+ grid.replaceChildren(...tiles);
+ grid.setAttribute('aria-label',`机器人在第 ${y+1} 行、第 ${x+1} 列，面朝${'北东南西'[dir]}`);
+ const input=peripheral.input;
+ $('maze-sensors').replaceChildren(...['前','左','右'].map((label,index)=>{
+  const sensor=document.createElement('span'),blocked=(input>>index)&1;
+  sensor.className=blocked?'blocked':'';sensor.textContent=label+' '+(blocked?'有墙':'畅通');
+  return sensor;
+ }));
+ $('maze-input').textContent='0b'+input.toString(2).padStart(3,'0');
+ $('maze-output').textContent=lastCommand===null?'—':lastCommand+' · '+(['左转','前进','右转'][lastCommand]||'无效指令');
+ const pc=values.pc?.[0],word=values.rom?.[0];
+ let instruction='—';
+ if(!net.error&&typeof pc==='number'&&typeof word==='number'){
+  try{
+   const rules=Game.overture.parseRules(doc.isa??Game.overture.defaultRules);
+   instruction=fmt(pc,8)+' · '+Game.overture.disassemble(word,rules);
+  }catch{instruction=fmt(pc,8)+' · '+fmt(word,8);}
+ }
+ $('maze-instruction').textContent=instruction;
+ $('maze-progress').textContent=`${moves} 个动作 · ${ticks} 个周期`;
+ const exhausted=mazeCycleLimitReached(),finished=peripheral.done||exhausted;
+ const run=$('maze-run');
+ run.disabled=!!net.error||finished;run.textContent=timer?'暂停':'运行';run.setAttribute('aria-pressed',String(!!timer));
+ $('maze-step').disabled=!!net.error||finished;
+ const message=net.error|| (peripheral.pass?'已到达出口。':failure||(exhausted?'达到周期上限，请检查程序是否进入循环。':timer?'机器人运行中。':ticks?'已暂停，可以继续运行或单步。':'运行示例程序，或单步查看 CPU 指令。'));
+ if($('maze-status').textContent!==message)$('maze-status').textContent=message;
+}
+$('maze-run').onclick=()=>{if(timer)stop();else $('run').click();draw();};
+$('maze-step').onclick=()=>{stop();step();};
+$('maze-reset').onclick=()=>{$('reset-state').click();};
+$('maze-map').onchange=()=>{
+ const index=Number($('maze-map').value);
+ if(level.workshop!=='maze'||!level.maps[index])return;
+ mazeMapIndex=index;stop();compileCurrent();draw();renderTrace();
+};
 function submitMineMove(index,flag){
  const device=Game.mineDevice,memory=state.ram;
  if(net.error||!memory){notify(net.error||'请连接扫雷所需的 RAM');return;}
@@ -729,7 +792,7 @@ function renderInspector(){
  if(n.type==='CUSTOM'){
   controls.append(button('打开内部电路副本',()=>{
    persist();const internal=clone(n.spec.circuit);
-   inspectionStack.push({levelId:level.id,doc:clone(doc),state:clone(state),ticks,records:clone(records),camera:{...camera},selected});
+   inspectionStack.push({levelId:level.id,doc:clone(doc),state:clone(state),ticks,records:clone(records),camera:{...camera},selected,mazeMapIndex,peripheral});
    openLevel('sandbox',false,true);doc=internal;edit();$('title').textContent=n.label+' · 内部电路副本';$('description').textContent='可继续逐层打开。返回时保留上层电路和运行状态。';$('fit').click();
   }));
  }
@@ -827,7 +890,7 @@ board.addEventListener('wheel',e=>{
 function step(render=true){
  if(net.error){stop();selected=net.node;notify(net.error);draw();return;}
  try{
-  if(peripheral?.done){stop();return;}
+  if(peripheral?.done||mazeCycleLimitReached()){stop();return;}
   const overrides=level.machine==='symphony'&&pendingKeys.length?{keyboard:pendingKeys[0]}:{};
   if(peripheral)overrides.input=peripheral.input;
   if(level.machine&&net.incoming.has('strobe')&&net.incoming.has('output')){
@@ -841,7 +904,10 @@ function step(render=true){
    }
    if((before.values.rom?.[0]>>>24)===3&&pendingKeys.length)pendingKeys.shift();
   }
-  const result=net.tick(state,overrides);state=result.state;values=result.values;ticks++;
+  const result=net.tick(state,overrides);state=result.state;ticks++;
+  const live=peripheral&&overrides.input!==peripheral.input?net.evaluate(state,{...overrides,input:peripheral.input}):result;
+  values=live.values;
+  if(mazeCycleLimitReached())stop();
   if(Game.isComputer(level)){
    for(const w of result.writes){
     if(level.machine||w.id!=='ram'||w.address!==255)continue;
@@ -850,7 +916,7 @@ function step(render=true){
    }
    if(values.ctrl?.[6]===0)stop();
   }
-  records.push({tick:ticks,signals:traceSignals.map(p=>p.output?values[p.id]?.[0]:result.inputs(p.id)[0])});
+  records.push({tick:ticks,signals:traceSignals.map(p=>p.output?values[p.id]?.[0]:live.inputs(p.id)[0])});
   if(records.length>32)records.shift();if(render){draw();renderTrace();}
  }catch(e){stop();notify(e.message);}
 }
@@ -1110,7 +1176,15 @@ document.addEventListener('keydown',e=>{
  if(e.code==='Space'&&e.target.tagName!=='BUTTON'&&(!level.workshop||workshopEditing)){e.preventDefault();step();}
 });
 $('back-circuit').onclick=()=>{
- if(!inspectionStack.length)return;const parent=inspectionStack.pop();openLevel(parent.levelId,false,true);if(level.workshop)setWorkshopView(true);doc=parent.doc;compileCurrent();state=parent.state;ticks=parent.ticks;records=parent.records;camera=parent.camera;selected=parent.selected;if(!net.error)values=net.evaluate(state).values;draw();renderTrace();notify('已返回上层电路');
+ if(!inspectionStack.length)return;
+ const parent=inspectionStack.pop();
+ openLevel(parent.levelId,false,true);
+ doc=parent.doc;compileCurrent();
+ ({state,ticks,records,camera,selected,mazeMapIndex,peripheral}=parent);
+ if(level.workshop==='maze')$('maze-map').value=String(mazeMapIndex);
+ if(level.workshop)setWorkshopView(true);
+ if(!net.error)values=net.evaluate(state,peripheral?{input:peripheral.input}:{}).values;
+ draw();renderTrace();notify('已返回上层电路');
 };
 // The component library holds snapshots, so editing a blueprint cannot silently
 // change circuits that already instantiate it.
