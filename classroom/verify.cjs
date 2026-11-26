@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const C=require('./dist/circuit.js');
-global.Circuit=C;require('./dist/levels.js');require('./dist/campaign.js');require('./dist/references.js');require('./dist/overture.js');require('./dist/symphony.js');require('./dist/mines32.js');require('./dist/course.js');require('./dist/devices.js');
+global.Circuit=C;require('./dist/levels.js');require('./dist/campaign.js');require('./dist/references.js');require('./dist/overture.js');require('./dist/symphony.js');require('./dist/mines32.js');require('./dist/course.js');require('./dist/devices.js');require('./dist/workshop.js');require('./dist/light-workshop.js');require('./dist/workshop-guides.js');
 const {node:n,wire:w}=Game;
 let checks=0;
 function test(name,fn){fn();checks++;process.stdout.write('PASS '+name+'\n');}
@@ -11,6 +11,115 @@ function net(d){const result=C.compile(d.nodes,d.wires);assert.ifError(result.er
 test('campaign blueprints and all vector values',()=>{
  for(const l of Game.levels){const d=l.build();C.validate(d);assert(d.nodes.length);for(const v of l.vectors||[])assert(v.expected.every(Number.isInteger));}
  assert(Game.levels.length>=27);
+});
+const {command,data,model,framebuffer,diskImage,transport}=Game.workshopKit;
+function runWorkshop(name){
+ const work=Game.levels.find(l=>l.id==='workshop-'+name);
+ const cpu=net(work.build()),link=name==='link'?transport():null;
+ let state=cpu.initial();
+ if(name==='shell')state.storage=diskImage();
+ return {
+  link,get state(){return state;},
+  run(value){
+   state.ram[command]=value;
+   const outputs=[];
+   for(let i=0;i<24000;i++){
+    const input=link?.inputs||{},before=cpu.evaluate(state,input);
+    if(before.inputs('strobe')[0])outputs.push(before.inputs('output')[0]);
+    link?.sample(before);
+    state=cpu.tick(state,input).state;
+    if(!state.ram[command])return outputs;
+   }
+   assert.fail(work.title+' did not acknowledge its input');
+  }
+ };
+}
+test('workshop lander updates fuel and collision in the CPU',()=>{
+ const crash=runWorkshop('lander');crash.run(16);
+ for(let i=0;i<80&&!crash.state.ram[model+10];i++)crash.run(16);
+ assert.equal(crash.state.ram[model+10],2);
+ const landing=runWorkshop('lander');landing.run(16);
+ for(let i=0;i<180&&!landing.state.ram[model+10];i++){
+  const velocity=Array.from({length:4},(_,j)=>landing.state.ram[model+4+j]||0).reduce((v,b,j)=>v|(b<<(8*j)),0);
+  landing.run(velocity>8?17:16);
+ }
+ assert.equal(landing.state.ram[model+10],1);
+ assert(landing.state.ram[model+8]<32);
+});
+test('workshop link uses two circuits to accept or retry a row',()=>{
+ const bus=runWorkshop('link'),image=[0,126,66,90,90,66,126,0];
+ image.forEach((value,i)=>bus.state.ram[data+i]=value);
+ bus.run(1);
+ assert.deepEqual(image.map((_,i)=>bus.state['rx-ram'][data+i]),image);
+ assert.equal(bus.state.ram[model+17],0);
+ bus.link.corrupt();bus.state.ram[data+1]=255;bus.run(1);
+ assert.equal(bus.link.corrupted,1);assert.equal(bus.state.ram[model+17],1);
+ assert.equal(bus.state['rx-ram'][data+1],255);
+});
+test('workshop cube calculates lines and changes the framebuffer',()=>{
+ const machine=runWorkshop('cube');machine.run(1);
+ const pixels=()=>Array.from({length:64*48},(_,i)=>machine.state.ram[framebuffer+i]||0);
+ const first=pixels();
+ assert(first.filter(Boolean).length>50);assert.equal(machine.state.ram[model],1);
+ for(let i=0;i<64*48;i++)delete machine.state.ram[framebuffer+i];
+ machine.run(1);
+ assert.equal(machine.state.ram[model],2);
+ assert.notDeepEqual(pixels(),first);
+});
+test('workshop rhythm emits the selected tracks and wraps the beat counter',()=>{
+ const machine=runWorkshop('rhythm');machine.run(1);machine.run(17);
+ assert.deepEqual(machine.run(65),[5]);assert.equal(machine.state.ram[model+64],0);
+ for(let i=0;i<7;i++)assert.deepEqual(machine.run(65),[0]);
+ assert.deepEqual(machine.run(65),[5]);
+});
+test('workshop command shell loads and executes its disk bytecode',()=>{
+ const machine=runWorkshop('shell');
+ for(const line of ['ls','cat readme.txt','run count.bin','nope']){
+  Array.from(line,(char,i)=>machine.state.ram[data+i]=char.charCodeAt(0));
+  machine.run(line.length);
+ }
+ const output=Array.from({length:200},(_,i)=>String.fromCharCode(machine.state.ram[0x5400+i]||0)).join('');
+ assert.match(output,/readme.txt\ncount.bin/);assert.match(output,/Files live on the virtual disk/);
+ assert.match(output,/123\n/);assert.match(output,/Unknown command/);
+ assert.equal(machine.state.ram[0x1500],1);
+});
+test('light workshop routes three puzzles with gates and latches its result',()=>{
+ const work=Game.levels.find(l=>l.id==='workshop-light'),light=Game.lightWorkshop;
+ function simulate(index,flipped,initial={}){
+  const board=work.build();
+  assert(!board.nodes.some(n=>n.type.startsWith('ROM')));
+  light.setInputs(board,index,light.maskOf(flipped));
+  const model=net(board);
+  let state={...model.initial(),...initial},result;
+  for(let i=0;i<65;i++){
+   result=model.tick(state);state=result.state;
+   const out=light.read(model,result);
+   assert(out);
+   if(out.done){
+    assert.deepEqual(light.read(model,model.tick(state)),out);
+    return out;
+   }
+  }
+  assert.fail('light circuit did not latch a result');
+ }
+ assert.deepEqual(simulate(0,[]),{x:1,y:0,direction:3,done:1,hit:0,loop:0});
+ for(const [index,solution] of [[0,[1,9]],[1,[2,12]],[2,[2,7,8,15]]]){
+  const out=simulate(index,solution);
+  assert.equal(out.x,3);assert.equal(out.y,light.puzzles[index].goal);
+  assert.equal(out.direction,0);assert.equal(out.hit,1);
+ }
+ assert.equal(simulate(0,[],{'ray-count':63}).loop,1);
+});
+test('all eight workshops have guides and separate build slots',()=>{
+ const {originals,guides,markdown}=Game.workshopGuides;
+ assert.equal(originals.length,8);
+ for(const work of originals){
+  assert(guides[work.id].steps.length>=3);
+  const guide=markdown(work);
+  assert(guide.includes('参考接线表'));
+  if(work.program)assert(guide.includes(work.program));else assert(!guide.includes('参考汇编'));
+  assert(Game.levels.some(l=>l.workshopBuildOf===work.id));
+ }
 });
 test('full adder, every truth-table row',()=>{
  const a=net(Game.fullAdder());

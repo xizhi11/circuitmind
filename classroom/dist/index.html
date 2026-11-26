@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CircuitMind · 从一扇门到一台计算机</title><link rel="stylesheet" href="style.css"><script defer src="wasm.js"></script><script defer src="circuit.js"></script><script defer src="levels.js"></script><script defer src="campaign.js"></script><script defer src="references.js"></script><script defer src="overture.js"></script><script defer src="symphony.js"></script><script defer src="mines32.js"></script><script defer src="course.js"></script><script defer src="devices.js"></script><script defer src="app.js"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CircuitMind · 从一扇门到一台计算机</title><link rel="stylesheet" href="style.css"><script defer src="wasm.js"></script><script defer src="circuit.js"></script><script defer src="levels.js"></script><script defer src="campaign.js"></script><script defer src="references.js"></script><script defer src="overture.js"></script><script defer src="symphony.js"></script><script defer src="mines32.js"></script><script defer src="course.js"></script><script defer src="devices.js"></script><script defer src="workshop.js"></script><script defer src="light-workshop.js"></script><script defer src="workshop-guides.js"></script><script defer src="app.js"></script></head>
 <body>
 <header class="topbar">
   <div class="actions header-tools">
@@ -9,7 +9,7 @@
     <button id="undo" title="Ctrl+Z">撤销</button><button id="redo" title="Ctrl+Y">重做</button>
     <button id="zoom-out" aria-label="缩小画布">−</button><button id="zoom-in" aria-label="放大画布">＋</button>
   </div>
-  <h1 id="title"></h1>
+  <h1 id="title" tabindex="-1"></h1>
   <div class="actions header-status">
     <span id="clock-rate" class="mono"></span>
     <button id="export" title="导出当前电路蓝图">导出</button>
@@ -32,7 +32,13 @@
         <select id="speed"><option value="1">1 Hz</option><option value="4">4 Hz</option><option value="10">10 Hz</option><option value="12">12 Hz</option><option value="100" selected>100 Hz</option><option value="500">500 Hz</option><option value="5000">5 kHz</option></select>
       </label>
     </section>
-    <section class="panel"><h2>输入状态</h2><div id="monitor-inputs" class="signal-list"></div></section>
+    <section class="panel io-monitor">
+      <h2>输入与输出</h2>
+      <div class="io-monitor-heading"><h3>输入</h3><span>点灯切换</span></div>
+      <div id="monitor-inputs" class="signal-list"></div>
+      <h3 class="io-output-heading">输出</h3>
+      <div id="monitor-outputs" class="signal-list"></div>
+    </section>
     <section class="panel"><h2>寄存器状态</h2><div id="monitor-registers" class="signal-list"></div></section>
     <details class="panel course-list">
       <summary>关卡进度</summary>
@@ -43,10 +49,54 @@
 
   <main class="workbench">
     <section class="mission">
-      <div><span id="tag" class="eyebrow"></span><p id="description"></p></div>
-      <div class="actions mission-actions"><button id="test" class="primary">运行测试</button><button id="next-level" hidden>下一关</button><button id="workshop-view" hidden>编辑电路与汇编</button></div>
+      <div><span id="tag" class="eyebrow"></span><p id="description"></p><p id="completion-status" role="status"></p></div>
+      <div class="actions mission-actions"><button id="test" class="primary">运行测试</button><button id="next-level" hidden>下一关</button><button id="workshop-view" hidden>编辑电路与汇编</button><button id="workshop-guide" hidden>技术说明与搭建</button></div>
     </section>
     <section id="workshop-play" aria-label="工坊试玩" hidden>
+      <section id="light-panel" aria-labelledby="light-title" hidden>
+        <div class="light-controls">
+          <label for="light-puzzle">题目 <select id="light-puzzle"></select></label>
+          <div class="actions">
+            <button type="button" class="primary" id="light-run">发光</button>
+            <button type="button" id="light-step">单步</button>
+            <button type="button" id="light-reset">复位光束</button>
+          </div>
+        </div>
+        <div class="light-display">
+          <div>
+            <h3 id="light-title">光路</h3>
+            <div class="light-board">
+              <div class="light-emitter" title="从第 1 行左侧发光" aria-hidden="true">▶</div>
+              <div class="light-board-body">
+                <div id="light-grid" role="group" aria-label="4 × 4 镜面棋盘"></div>
+                <svg id="light-overlay" viewBox="0 0 4 4" aria-hidden="true"></svg>
+              </div>
+              <div id="light-targets" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="light-probe">
+            <h3>寄存器与输出</h3>
+            <dl>
+              <div><dt>周期</dt><dd id="light-cycle" class="mono">0</dd></div>
+              <div><dt>坐标 X, Y</dt><dd id="light-position" class="mono">—</dd></div>
+              <div><dt>方向</dt><dd id="light-direction">—</dd></div>
+            </dl>
+            <p id="light-status" role="status"></p>
+          </div>
+        </div>
+        <p class="muted">点击镜面切换朝向。改动后光束从左上角重新出发。</p>
+      </section>
+      <section id="studio-panel" aria-label="工坊设备" hidden>
+        <div class="actions studio-controls" id="studio-controls">
+          <button type="button" class="primary" id="studio-run">播放</button>
+          <button type="button" id="studio-next-frame">推进一帧</button>
+          <button type="button" id="studio-step">单步指令</button>
+          <button type="button" id="studio-reset">复位</button>
+        </div>
+        <div class="actions studio-controls" id="studio-extra"></div>
+        <div id="studio-display"></div>
+        <p id="studio-registers" class="mono"></p><p id="studio-status" role="status"></p>
+      </section>
       <section id="maze-panel" aria-labelledby="maze-heading" hidden>
         <div class="maze-controls">
           <label for="maze-map">地图 <select id="maze-map"></select></label>
@@ -79,7 +129,7 @@
     <section class="panel" id="drill-panel" hidden><button id="drill-start">开始一轮</button><p id="drill-question" aria-live="polite"></p><input id="drill-answer" aria-label="答案" autocomplete="off" spellcheck="false" hidden><button id="drill-submit" hidden>提交</button></section>
     <section class="editor" aria-label="电路画布">
       <div class="toolbar">
-        <div class="actions"><button id="back-circuit" hidden>返回上层</button><button id="fit">适应画布</button><button id="focus-editor">专注搭建</button></div>
+        <div class="actions"><button id="back-circuit" hidden>返回上层</button><button id="fit">适应画布</button><button id="focus-editor">专注搭建</button><button id="delete-selection" type="button" class="delete-action" title="选中元件或导线后删除（Delete）" disabled>删除所选</button></div>
         <div class="actions"><button id="ask-mentor">问导师</button><button id="tool-check">后端检查</button></div>
       </div>
       <div class="canvas-wrap">
@@ -118,6 +168,7 @@
       <section class="panel detail-screen" id="detail-code" hidden>
         <section id="program-panel" hidden><h2 id="program-heading">CM8 汇编程序</h2>
           <details id="isa-panel" hidden><summary>指令编码规则</summary><p>每行填写指令名和八位编码。i 表示立即数，d 和 s 表示目的和来源寄存器。</p><textarea id="isa-rules" spellcheck="false" aria-label="指令编码规则"></textarea></details>
+          <label id="workshop-program-picker" hidden>当前程序 <select id="workshop-program-target"><option value="sender">发送端</option><option value="receiver">接收端</option></select></label>
           <textarea id="program" spellcheck="false" aria-label="汇编程序"></textarea><button id="assemble" class="primary">汇编并加载</button>
           <p class="muted" id="instruction-guide"></p><button id="use-machine" hidden>将这台机器用于后续编程关</button>
           <button id="keyboard-input" hidden>点击后向 CPU 输入按键</button><pre id="device-state" hidden aria-label="外部设备"></pre><pre id="terminal" aria-label="程序输出终端"></pre><div id="cpu-state"></div>
@@ -136,9 +187,28 @@
   </section>
 </div>
 <dialog id="world"><div class="dialog-heading"><div><p class="eyebrow">CIRCUITMIND · CAMPAIGN</p><h1>从逻辑门，走向自己的计算机</h1><p>构造 · 验证 · 封装 · 复用</p></div><div class="actions"><button id="restart" class="subtle">重开当前关</button><button id="close-world">返回电路</button></div></div><div id="world-map"></div></dialog>
+<dialog id="completion-dialog" aria-labelledby="completion-title" aria-describedby="completion-result">
+  <div class="completion-heading"><span class="completion-mark" aria-hidden="true">✓</span><h2 id="completion-title"></h2></div>
+  <p id="completion-result"></p>
+  <p id="completion-reward"></p>
+  <div class="completion-progress" id="completion-progress">
+    <label for="completion-meter" id="completion-count"></label>
+    <progress id="completion-meter"></progress>
+  </div>
+  <p id="completion-next-name"></p>
+  <div class="actions completion-actions">
+    <button id="completion-stay" type="button" autofocus>留在本关</button>
+    <button id="completion-next" class="primary" type="button"></button>
+  </div>
+</dialog>
 <dialog id="workshop-dialog" aria-labelledby="workshop-title">
   <div class="dialog-heading"><h2 id="workshop-title">创意工坊</h2><button id="close-workshop" type="button">关闭</button></div>
   <div id="workshop-works"></div>
+</dialog>
+<dialog id="workshop-guide-dialog" aria-labelledby="workshop-guide-title">
+  <div class="dialog-heading"><h2 id="workshop-guide-title"></h2><button id="close-workshop-guide" type="button">关闭</button></div>
+  <div id="workshop-guide-content"></div>
+  <div class="actions guide-actions" id="workshop-guide-actions"></div>
 </dialog>
 <dialog id="package-dialog"><h2>保存为自定义元件</h2><p>所有 IN / OUT 是公开接口，内部电路会独立保存。每个实例拥有自己的寄存器和内存，共享同一个时钟。</p><label>元件名称 <input id="package-name" maxlength="32" value="我的元件"></label><p id="package-ports"></p><div class="actions"><button id="save-package" class="primary">验证并保存</button><button id="cancel-package">取消</button></div></dialog>
 <dialog id="mentor-dialog" aria-labelledby="mentor-title">

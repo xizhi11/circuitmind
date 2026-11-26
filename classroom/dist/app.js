@@ -10,6 +10,9 @@ let inspectionStack=[],multi=new Set(),clipboard=null;
 let completed={},saved={},library=[],breakpoints=new Set();
 let storageDatabase=null;
 let mineFlags=false,deviceScreen=[],pendingKeys=[],peripheral=null,workshopEditing=false,mazeMapIndex=0;
+let studio=null,studioAudio=null,programTarget='sender';
+const lightKit=Game.lightWorkshop;
+let light=null;
 let round=null;
 let guided=true,detailTab='component',paletteCategory=null,traceSignals=[];
 const detailScreens={component:'detail-ports',verify:'detail-tests',signals:'detail-trace',program:'detail-code'};
@@ -73,7 +76,7 @@ function syncClock(){
  const rate=Number($('speed').value)||100;
  $('clock-rate').textContent=`CLK ${rate>=1000?rate/1000+' kHz':rate+' Hz'} · ${1000/rate} ms`;
 }
-function stop(){clearInterval(timer);timer=null;syncClock();}
+function stop(){clearInterval(timer);timer=null;if(studio)studio.auto=false;syncClock();}
 function statefulModule(n){
  return n.type==='CUSTOM'&&['sr-latch','dff-build','register','register8','pc-build'].includes(n.spec.courseId);
 }
@@ -91,10 +94,23 @@ function compileCurrent(reset=true){
   return [];
  }).slice(0,24);
  if(reset){ticks=0;records=[];terminal='';deviceScreen=[];pendingKeys=[];peripheral=level.createDevice?.(level.workshop==='maze'?mazeMapIndex:0)??null;state=net.error?{}:net.initial();}
- if(!net.error)values=net.evaluate(state,peripheral?{input:peripheral.input}:{}).values;else values={};
+ if(reset){
+  studio=level.demo?{auto:false,mask:0,keys:0,nextAt:0,budget:0,status:'',link:level.demo==='link'?Game.workshopKit.transport():null}:null;
+  if(level.demo==='shell'&&state.storage)state.storage=Game.workshopKit.diskImage();
+  light=level.workshop==='light'?{output:null,trail:[]}:null;
+ }
+ if(!net.error){
+  const result=net.evaluate(state,peripheral?{input:peripheral.input}:{});
+  values=result.values;
+  if(light)sampleLight(result);
+ }else{
+  values={};
+  if(light)light.output=null;
+ }
 }
-function edit(){stop();focused=null;testCases=[];testIndex=-1;compileCurrent();persist();draw();renderTests();renderTrace();}
+function edit(){stop();focused=null;testCases=[];testIndex=-1;compileCurrent();persist();draw();renderPassStatus();renderTests();renderTrace();}
 function starterCircuit(){
+ if(level.workshopBuildOf)return {nodes:[],wires:[]};
  const build=guided&&level.courseBuild?level.courseBuild:level.build;
  const base=build();
  if(guided&&level.courseSubstitutions){
@@ -108,7 +124,7 @@ function starterCircuit(){
  }
  return base;
 }
-function usesMineDevice(){return level.id==='mines32'||level.id==='workshop-mines';}
+function usesMineDevice(){return level.id==='mines32'||level.workshop==='mines';}
 function setWorkshopView(editing){
  workshopEditing=editing;
  const playing=level.workshop&&!editing;
@@ -116,15 +132,19 @@ function setWorkshopView(editing){
  else document.body.classList.remove('workshop-play');
  $('workshop-play').hidden=!playing;
  $('maze-panel').hidden=level.workshop!=='maze';
+ $('light-panel').hidden=level.workshop!=='light';
+ $('studio-panel').hidden=!level.demo;
+ $('workshop-guide').hidden=!level.workshop;
  const toggle=$('workshop-view');
  toggle.hidden=!level.workshop;
- toggle.textContent=playing?'编辑电路与汇编':'返回试玩';
+ toggle.textContent=playing?(level.workshop==='light'?'查看与编辑电路':'编辑电路与汇编'):'返回试玩';
  const host=$(playing&&level.workshop==='mines'?'workshop-play':'program-panel');
  const panel=$('mines-panel');
  if(panel.parentElement!==host)host.append(panel);
- if(editing&&level.workshop)showDetails('program');
+ if(editing&&level.workshop)showDetails(Game.isComputer(level)?'program':'component');
 }
-function openLevel(id,fresh=false,keepContext=false){
+function openLevel(id,fresh=false,keepContext=false,editor=false){
+ if($('completion-dialog').open)$('completion-dialog').close();
  if(!keepContext)inspectionStack=[];multi.clear();
  stop();round=null;level=Game.levels.find(l=>l.id===id)||Game.levels[0];
  mazeMapIndex=0;
@@ -156,7 +176,10 @@ function openLevel(id,fresh=false,keepContext=false){
  if(level.drill)document.body.classList.add('drill-mode');else document.body.classList.remove('drill-mode');
  if(level.drill){$('drill-question').textContent=doc.bestTime?'最佳 '+(doc.bestTime/1000).toFixed(2)+' 秒':'';$('drill-answer').hidden=true;$('drill-submit').hidden=true;}
  breakpoints.clear();
- $('program-panel').hidden=!Game.isComputer(level);$('program').value=doc.draftSource??doc.source??level.program??'';
+ $('program-panel').hidden=!Game.isComputer(level);
+ programTarget='sender';$('workshop-program-target').value=programTarget;
+ $('workshop-program-picker').hidden=level.demo!=='link';
+ syncProgramSource();
  $('detail-program').hidden=!Game.isComputer(level);
  showDetails(Game.isComputer(level)?'program':'component',true);
  syncProgramPanel();
@@ -171,8 +194,10 @@ function openLevel(id,fresh=false,keepContext=false){
  $('mine-flags').hidden=level.workshop!=='mines';
  $('mine-new-game').hidden=level.workshop!=='mines';
  $('mine-heading').textContent=mines?'扫雷 · 8 × 8':'CPU 屏幕 · 3 × 3';
- setWorkshopView(false);
- renderNav();renderPalette();$('fit').click();renderTests();renderTrace();
+ if(level.demo)prepareStudio();
+ if(light)prepareLight();
+ setWorkshopView(editor||!!level.workshopBuildOf);
+ renderNav();renderPassStatus();renderPalette();$('fit').click();renderTests();renderTrace();
 }
 function renderNav(){
  $('levels').replaceChildren();
@@ -189,11 +214,52 @@ function renderNav(){
  const next=nextLevel();
  $('next-level').hidden=!next||!!locked(next)||(!completed[level.id]&&Game.isGraded(level));
 }
+function renderPassStatus(detail=''){
+ const status=$('completion-status');
+ status.className=detail?'current':'';
+ status.textContent=detail?'本次通过 · '+detail:completed[level.id]?'此前已通过':'';
+}
+function completeLevel(detail,reward=''){
+ const first=!completed[level.id];
+ const next=nextLevel(),wasLocked=next&&locked(next);
+ clearTimeout(notify.timeout);
+ $('toast').classList.remove('show');$('toast').textContent='';
+ completed[level.id]=true;
+ persist();renderNav();renderPassStatus(detail);
+ const dialog=$('completion-dialog');
+ if(!first||dialog.open)return;
+ const canAdvance=next&&!locked(next);
+ const lessons=visibleLessons().filter(Game.isGraded);
+ const done=lessons.filter(l=>completed[l.id]).length;
+ const finishedRoute=guided&&Game.guidedPath.at(-1)===level&&done===lessons.length;
+ $('completion-title').textContent=finishedRoute?'教学路线已完成':'完成「'+$('title').textContent+'」';
+ const lead=level.drill?'':Game.isComputer(level)?'程序跑通了！':'搭对了！';
+ $('completion-result').textContent=lead+detail+'。';
+ $('completion-reward').textContent=reward;
+ $('completion-progress').hidden=!lessons.includes(level);
+ $('completion-count').textContent='已完成 '+done+' / '+lessons.length+' 项实验';
+ $('completion-meter').max=lessons.length;
+ $('completion-meter').value=done;
+ $('completion-next-name').textContent=canAdvance?(wasLocked?'已解锁「':'下一关「')+next.title+'」':
+  finishedRoute?'可以去创意工坊试跑程序，观察 CPU 和外设怎么配合。':'';
+ $('completion-next').textContent=canAdvance?'进入下一关':finishedRoute?'去创意工坊':'打开关卡地图';
+ $('completion-next').onclick=()=>{
+  dialog.close();
+  if(canAdvance){openLevel(next.id);$('title').focus();}
+  else $(finishedRoute?'workshop':'home').click();
+ };
+ dialog.showModal();
+}
+$('completion-stay').onclick=()=>$('completion-dialog').close();
+$('completion-dialog').addEventListener('close',()=>{
+ if(level.drill&&$('drill-answer').hidden&&document.activeElement===document.body)$('drill-start').focus();
+});
 function showQuestion(){
  $('drill-answer').value='';$('drill-question').textContent=(round.index+1)+' / '+round.items.length+'　'+round.items[round.index].prompt;
  $('drill-answer').focus();
 }
 $('drill-start').onclick=()=>{
+ renderPassStatus();
  round={items:level.drill(),index:0,start:performance.now()};
  $('drill-answer').hidden=false;$('drill-submit').hidden=false;showQuestion();
 };
@@ -202,9 +268,11 @@ $('drill-submit').onclick=()=>{
  const q=round.items[round.index],answer=$('drill-answer').value.trim().toUpperCase();
  if(!(q.radix===2?/^[01]+$/:/^[0-9A-F]+$/).test(answer)||parseInt(answer,q.radix)!==parseInt(q.answer,q.radix)){notify('再检查一下位权或真值表');return;}
  if(++round.index<round.items.length){showQuestion();return;}
- const elapsed=Math.round(performance.now()-round.start);doc.bestTime=Math.min(doc.bestTime??Infinity,elapsed);
- completed[level.id]=true;round=null;persist();renderNav();$('drill-answer').hidden=true;$('drill-submit').hidden=true;
+ const elapsed=Math.round(performance.now()-round.start),improved=elapsed<(doc.bestTime??Infinity),total=round.items.length;
+ doc.bestTime=Math.min(doc.bestTime??Infinity,elapsed);
+ round=null;$('drill-answer').hidden=true;$('drill-submit').hidden=true;
  $('drill-question').textContent='八题全对 · 本次 '+(elapsed/1000).toFixed(2)+' 秒 · 最佳 '+(doc.bestTime/1000).toFixed(2)+' 秒';
+ completeLevel(total+' / '+total+' 题答对'+(improved?' · 最佳用时 '+(elapsed/1000).toFixed(2)+' 秒':''));
 };
 $('drill-answer').onkeydown=e=>{if(e.key==='Enter')$('drill-submit').click();};
 const componentCategories=[['logic','◇','布尔'],['word','＋','整型'],['other','▱','杂项'],['io','↔','输入输出'],['custom','▣','自定义']];
@@ -429,34 +497,93 @@ function portPosition(n,index,output){return [n.x+(output?146:0),n.y+42+index*23
 function wireValue(w){return values[w.from]?.[w.output??0];}
 function sourceOf(id,pin){return doc.wires.find(w=>w.to===id&&w.pin===pin);}
 function fmt(v,width=1){if(v===null)return 'Z';if(v==='X')return 'X';return v===undefined?'—':width>1?'0x'+v.toString(16).toUpperCase().padStart(Math.ceil(width/4),'0'):String(v);}
+function ledClass(v){return 'led '+(v===1?'on':v===0?'off':v===undefined?'':'unknown');}
 function signalLed(v){
  const led=document.createElement('i');
- led.className='led '+(v===1?'on':v===0?'off':v===undefined?'':'unknown');
+ led.className=ledClass(v);
  led.setAttribute('aria-hidden','true');
  return led;
 }
+const inputTypes=new Set(['IN','IN8','IN16','IN32','BIT']);
+const outputTypes=new Set(['OUT','OUT8','OUT16','OUT32']);
+function externalInput(n){return !!peripheral&&n.id==='input';}
+function setInputValue(n,value){
+ if(externalInput(n))return;
+ const max=2**definition(n).outputs[0].width-1;
+ if(!Number.isInteger(value)||value<0||value>max){notify('输入值超出范围');return;}
+ if(value===(n.value??0))return;
+ checkpoint();n.value=value;focused=null;compileCurrent(false);persist();
+ if(selected===n.id&&detailTab==='component'&&!$('detail-body').hidden)renderInspector();
+ draw();
+}
+function bitAt(value,i){return typeof value==='number'?Math.floor(value/2**i)%2:value;}
+function toggleInputBit(id,i){
+ const n=doc.nodes.find(node=>node.id===id),value=n?.value??0;
+ if(n)setInputValue(n,value+(bitAt(value,i)===0?1:-1)*2**i);
+}
+const signalViews=new WeakMap();
+function renderSignalList(monitor,signals,empty){
+ const key=JSON.stringify(signals.map(({id,label,width,editable})=>[id,label,width,editable]));
+ let view=signalViews.get(monitor);
+ if(view?.key!==key){
+  monitor.replaceChildren();
+  if(!signals.length)monitor.textContent=empty;
+  const rows=signals.map(({id,label,width,editable})=>{
+   const row=document.createElement('div');row.className=width===1?'signal-row single-bit':'signal-row';
+   const caption=document.createElement('div');caption.className='signal-caption';
+   const name=document.createElement('span');name.textContent=label;name.title=label;
+   const number=document.createElement('b');
+   caption.append(name,number);row.append(caption);
+   const bits=document.createElement('div');bits.className='signal-bits';
+   const controls=Array.from({length:width},(_,position)=>{
+    const i=width-1-position,led=signalLed();
+    if(!editable){bits.append(led);return {led};}
+    const toggle=button('',()=>toggleInputBit(id,i),'signal-toggle');
+    const name=width===1?label:label+' 第 '+i+' 位';
+    toggle.type='button';toggle.title=name+' · 点击切换';
+    toggle.setAttribute('aria-label',name);toggle.append(led);bits.append(toggle);
+    return {led,toggle};
+   });
+   row.append(bits);monitor.append(row);
+   return {number,bits,controls};
+  });
+  view={key,rows};signalViews.set(monitor,view);
+ }
+ signals.forEach(({label,width,value,disconnected,editable},index)=>{
+  const {number,bits,controls}=view.rows[index];
+  const display=disconnected?'未连接':fmt(value,width);
+  if(number.textContent===display)return;
+  number.textContent=display;
+  if(!editable){
+   const binary=typeof value==='number'?value.toString(2).padStart(width,'0'):display;
+   bits.setAttribute('role','img');bits.setAttribute('aria-label',label+' '+binary);
+  }
+  controls.forEach(({led,toggle},position)=>{
+   const bit=bitAt(value,width-1-position);
+   led.className=ledClass(bit);
+   if(toggle)toggle.setAttribute('aria-pressed',String(bit===1));
+  });
+ });
+}
 function renderMonitor(){
  $('monitor-tick').textContent=String(ticks).padStart(3,'0');
- for(const [id,filter] of [
-  ['monitor-inputs',n=>['IN','IN8','IN16','IN32','BIT'].includes(n.type)],
-  ['monitor-registers',n=>stateProbe(n,definition(n))]
- ]){
-  const monitor=$(id),items=doc.nodes.filter(filter);
-  monitor.replaceChildren();
-  if(!items.length){monitor.textContent=id==='monitor-inputs'?'暂无输入':'暂无寄存器';continue;}
-  for(const n of items){
-   const row=document.createElement('div');row.className='signal-row';
-   const width=definition(n).outputs[0].width,value=values[n.id]?.[0]??(id==='monitor-inputs'?n.value:state[n.id]);
-   const caption=document.createElement('div');caption.className='signal-caption';
-   const label=document.createElement('span');label.textContent=n.label;label.title=n.label;
-   const number=document.createElement('b');number.textContent=fmt(value,width);
-   caption.append(label,number);row.append(caption);
-   const bits=document.createElement('div');bits.className='signal-bits';
-   bits.setAttribute('aria-label',typeof value==='number'?value.toString(2).padStart(width,'0'):fmt(value,width));
-   for(let i=width-1;i>=0;i--)bits.append(signalLed(typeof value==='number'?Math.floor(value/2**i)%2:value));
-   row.append(bits);monitor.append(row);
+ const inputs=[],outputs=[],registers=[];
+ for(const n of doc.nodes){
+  const d=definition(n),signal={id:n.id,label:n.label,width:d.outputs[0]?.width??d.inputs[0]?.width};
+  if(inputTypes.has(n.type)){
+   const editable=!externalInput(n);
+   inputs.push({...signal,editable,value:values[n.id]?.[0]??(editable?(n.value??0):peripheral.input)});
+  }else if(outputTypes.has(n.type)){
+   const wire=net.incoming?.get(n.id)?.[0]??sourceOf(n.id,0);
+   outputs.push({...signal,value:wire?wireValue(wire):undefined,disconnected:!wire});
+  }else if(stateProbe(n,d)){
+   const value=values[n.id]?.[0];
+   registers.push({...signal,value:value===undefined?state[n.id]:value});
   }
  }
+ renderSignalList($('monitor-inputs'),inputs,'暂无输入');
+ renderSignalList($('monitor-outputs'),outputs,'暂无输出');
+ renderSignalList($('monitor-registers'),registers,'暂无寄存器');
 }
 const wireColors={cyan:'青色 · 数据',orange:'橙色 · 地址',green:'绿色 · 使能',purple:'品红 · 反馈'};
 function wireColor(w,target,width){
@@ -468,7 +595,7 @@ function wireColor(w,target,width){
 }
 function draw(){
  if(level.workshop&&!workshopEditing){
-  if(level.workshop==='maze')renderMaze();else if(usesMineDevice())renderMineDevice();
+  if(level.workshop==='maze')renderMaze();else if(usesMineDevice())renderMineDevice();else if(light)renderLight();else if(level.demo)renderStudio();
   return;
  }
  $('back-circuit').hidden=!inspectionStack.length;
@@ -507,7 +634,7 @@ function draw(){
   if(n.label!==n.type&&chars.length<10)svg('text',{x:n.x+134,y:n.y+22,'text-anchor':'end',class:'node-kind'},g).textContent=n.type;
   rect.addEventListener('pointerdown',e=>{
    if(e.button!==0)return;e.stopPropagation();const pt=worldPoint(e);
-   if(e.shiftKey){multi.has(n.id)?multi.delete(n.id):multi.add(n.id);selected=n.id;draw();return;}
+   if(e.shiftKey){multi.has(n.id)?multi.delete(n.id):multi.add(n.id);selected=[...multi].at(-1)??null;draw();return;}
    if(!multi.has(n.id)){multi.clear();multi.add(n.id);}
    drag={kind:'node',id:n.id,start:pt,left:n.x,top:n.y,before:clone(doc),positions:doc.nodes.filter(t=>multi.has(t.id)).map(t=>({id:t.id,x:t.x,y:t.y})),moved:false};
    selected=n.id;showDetails('component');board.setPointerCapture(e.pointerId);draw();
@@ -521,7 +648,7 @@ function draw(){
     const label=sharedRow&&p.width>1?p.name:p.name+' '+fmt(v,p.width);
     svg('text',{x:cx+(output?-11:11),y:cy+4,'text-anchor':output?'end':'start',class:'pin-label'},g).textContent=label;
     const activate=()=>{
-     if(output){pending=pending?.id===n.id&&pending?.output===i?null:{id:n.id,output:i,width:p.width};selected=n.id;showDetails('component');draw();return;}
+     if(output){pending=pending?.id===n.id&&pending?.output===i?null:{id:n.id,output:i,width:p.width};multi.clear();selected=n.id;showDetails('component');draw();return;}
      if(!pending){multi.clear();selected=w?.id||n.id;showDetails('component');draw();return;}
      if(pending.width!==p.width){notify('位宽不一致，请连接 '+p.width+' 位输出。');return;}
      checkpoint();doc.wires=doc.wires.filter(w=>!(w.to===n.id&&w.pin===i));
@@ -539,13 +666,18 @@ function draw(){
  $('status').className=net.error?'error':'';
  $('tick').textContent='周期 '+ticks;
  $('undo').disabled=!history.length;$('redo').disabled=!future.length;
+ const wireSelected=doc.wires.some(w=>w.id===selected);
+ const count=multi.size+Number((wireSelected||nodes.has(selected))&&!multi.has(selected));
+ const remove=$('delete-selection');
+ remove.disabled=count===0;
+ remove.textContent=count>1?'删除 '+count+' 个元件':count===0?'删除所选':wireSelected?'删除连线':'删除元件';
  renderMonitor();
  if(detailTab==='component'&&!$('detail-body').hidden&&!$('inspector').contains?.(document.activeElement))renderInspector();
  if(usesMineDevice())renderMineDevice();else if(level.id==='mines')renderMines();
  if(Game.isComputer(level)){
   const o8=level.machine==='overture';
   const s32=level.machine==='symphony';
-  $('terminal').textContent=terminal||(level.machine?'等待 OUT 输出…':'等待 ST 255 输出…');
+  $('terminal').textContent=level.demo==='shell'?studioText(state.ram||{}):terminal||(level.machine?'等待 OUT 输出…':'等待 ST 255 输出…');
   $('device-state').hidden=!peripheral;
   if(peripheral)$('device-state').textContent=peripheral.describe()+(peripheral.done?(peripheral.pass?'\n通过':'\n挑战结束'):'');
   const registers=s32?Game.symphony.names.slice(1).map((name,i)=>name+' '+fmt(values['r'+(i+1)]?.[0],32)).join('   '):o8?Array.from({length:6},(_,i)=>'R'+i+' '+fmt(values['r'+i]?.[0],8)).join('   '):'ACC '+fmt(values.acc?.[0],8);
@@ -610,8 +742,11 @@ function renderMaze(){
  const run=$('maze-run');
  run.disabled=!!net.error||finished;run.textContent=timer?'暂停':'运行';run.setAttribute('aria-pressed',String(!!timer));
  $('maze-step').disabled=!!net.error||finished;
- const message=net.error|| (peripheral.pass?'已到达出口。':failure||(exhausted?'达到周期上限，请检查程序是否进入循环。':timer?'机器人运行中。':ticks?'已暂停，可以继续运行或单步。':'运行示例程序，或单步查看 CPU 指令。'));
- if($('maze-status').textContent!==message)$('maze-status').textContent=message;
+ const won=!net.error&&peripheral.pass;
+ const message=net.error||(won?'到达出口！机器人执行了 '+moves+' 个动作。':failure||(exhausted?'达到周期上限，请检查程序是否进入循环。':timer?'机器人运行中。':ticks?'已暂停，可以继续运行或单步。':'运行示例程序，或单步查看 CPU 指令。'));
+ const status=$('maze-status');
+ if(status.textContent!==message)status.textContent=message;
+ status.className=won?'workshop-win':'';
 }
 $('maze-run').onclick=()=>{if(timer)stop();else $('run').click();draw();};
 $('maze-step').onclick=()=>{stop();step();};
@@ -621,6 +756,89 @@ $('maze-map').onchange=()=>{
  if(level.workshop!=='maze'||!level.maps[index])return;
  mazeMapIndex=index;stop();compileCurrent();draw();renderTrace();
 };
+const lightDirections=['东 →','南 ↓','西 ←','北 ↑'];
+const lightVectors=[[1,0],[0,1],[-1,0],[0,-1]];
+function sampleLight(result){
+ light.output=lightKit.read(net,result);
+ if(!light.output)return;
+ const {x,y}=light.output,last=light.trail.at(-1);
+ if(!last||last.x!==x||last.y!==y)light.trail.push({x,y});
+}
+function lightPuzzleIndex(){
+ const index=doc.lightPuzzle;
+ return Number.isInteger(index)&&lightKit.puzzles[index]?index:0;
+}
+function prepareLight(){
+ $('light-puzzle').replaceChildren(...lightKit.puzzles.map(({title},i)=>{
+  const option=document.createElement('option');option.textContent=title;option.value=i;return option;
+ }));
+ $('light-targets').replaceChildren(...Array.from({length:4},()=>{
+  const target=document.createElement('span');target.textContent='◎';return target;
+ }));
+ $('light-grid').replaceChildren(...Array.from({length:16},(_,i)=>{
+  const cell=button('',()=>{
+   const mask=doc.nodes.find(n=>n.id==='mirror-mask'),orientation=doc.nodes.find(n=>n.id==='mirror-flips');
+   const bit=1<<i;
+   if(!orientation||!(mask?.value&bit))return;
+   stop();checkpoint();orientation.value=(orientation.value??0)^bit;
+   compileCurrent();persist();draw();
+  });
+  cell.type='button';return cell;
+ }));
+}
+function renderLight(){
+ const index=lightPuzzleIndex(),puzzle=lightKit.puzzles[index],result=light.output;
+ const mirrors=doc.nodes.find(n=>n.id==='mirror-mask')?.value??0;
+ const flips=doc.nodes.find(n=>n.id==='mirror-flips')?.value??0;
+ const goal=doc.nodes.find(n=>n.id==='goal-row')?.value??puzzle.goal;
+ const run=$('light-run');
+ $('light-puzzle').value=String(index);
+ run.textContent=timer?'暂停':ticks===0?'发光':'继续发光';
+ run.disabled=!result||!!result.done;run.setAttribute('aria-pressed',String(!!timer));
+ $('light-step').disabled=!result||!!result.done||!!timer;
+ const lit=new Set(light.trail.map(({x,y})=>y*4+x));
+ Array.from($('light-grid').children).forEach((cell,i)=>{
+  const mirror=!!(mirrors&(1<<i)),flipped=!!(flips&(1<<i));
+  cell.disabled=!mirror;
+  cell.className=(mirror?'light-mirror ':'')+(lit.has(i)?'light-visited ':'')+
+   (result&&i===result.y*4+result.x&&!result.done?'light-head':'');
+  cell.textContent=mirror?(flipped?'╲':'╱'):'';
+  cell.setAttribute('aria-label','第 '+((i>>2)+1)+' 行第 '+((i&3)+1)+' 列，'+(mirror?(flipped?'反斜镜':'斜镜'):'空格'));
+ });
+ Array.from($('light-targets').children).forEach((target,i)=>{
+  target.className=goal===i?'light-target'+(result?.hit?' hit':''):'';
+ });
+ const overlay=$('light-overlay');overlay.replaceChildren();
+ if(light.trail.length){
+  const points=['0,.5',...light.trail.map(({x,y})=>(x+.5)+','+(y+.5))];
+  if(result?.done&&!result.loop){
+   const [dx,dy]=lightVectors[result.direction];
+   points.push((result.x+.5+dx*.5)+','+(result.y+.5+dy*.5));
+  }
+  svg('polyline',{class:result?.done&&!result.hit?'light-ray dim':'light-ray',points:points.join(' ')},overlay);
+ }
+ $('light-cycle').textContent=ticks;
+ $('light-position').textContent=result?result.x+', '+result.y:'—';
+ $('light-direction').textContent=result?lightDirections[result.direction]:'—';
+ const message=net.error||(!result?'请接好光路输出端口并检查信号。':
+  result.hit?'接收器点亮！':result.loop?'已走满 64 拍，光束停止。':result.done?'光束射出边界，翻转镜子再试。':
+  ticks?'目标在右侧第 '+(goal+1)+' 行。':'从左上角向东发光。目标在右侧第 '+(goal+1)+' 行。');
+ const status=$('light-status');
+ if(status.textContent!==message)status.textContent=message;
+ status.className=result?.hit?'workshop-win':'';
+}
+$('light-puzzle').onchange=()=>{
+ const index=Number($('light-puzzle').value);
+ if(!lightKit.puzzles[index])return;
+ stop();checkpoint();lightKit.setInputs(doc,index);compileCurrent();persist();draw();
+};
+$('light-run').onclick=()=>{
+ if(timer){stop();draw();return;}
+ if(!light.output||light.output.done)return;
+ timer=setInterval(()=>step(),260);syncClock();draw();
+};
+$('light-step').onclick=()=>step();
+$('light-reset').onclick=()=>{stop();compileCurrent();draw();};
 function submitMineMove(index,flag){
  const device=Game.mineDevice,memory=state.ram;
  if(net.error||!memory){notify(net.error||'请连接扫雷所需的 RAM');return;}
@@ -683,7 +901,9 @@ function renderMineDevice(){
  }
  $('mine-flags').textContent='已标记 '+flags+' / 8';
  const message=net.error||(!state.ram?'缺少与扫雷设备相连的 RAM':ended===1?'踩雷了':ended===2?'胜利！已找全 56 个安全格':pending?'CPU 正在处理输入':'已揭开 '+(memory[device.count]||0)+' / 56');
- if($('mines-status').textContent!==message)$('mines-status').textContent=message;
+ const status=$('mines-status');
+ if(status.textContent!==message)status.textContent=message;
+ status.className=!net.error&&ended===2?'workshop-win':'';
 }
 $('mine-mode').onclick=()=>{mineFlags=!mineFlags;renderMineDevice();};
 $('mine-new-game').onclick=()=>{
@@ -693,21 +913,136 @@ $('mine-new-game').onclick=()=>{
  mineFlags=false;compileCurrent();persist();draw();renderTrace();
 };
 const componentHelp={
- NAND:'两个输入都为 1 时，输出为 0。',
+ IN:'把设置的值送到输出引脚 Q，可以用它给电路提供输入。',
+ OUT:'显示 A 引脚收到的值，用来观察电路的输出。',
+ CONST:'持续输出设定的八位值。', BIT:'持续输出设定的一位值。',
+ BUF:'把 A 的值原样送到 Q。',
+ NAND:'与非门。只有 A、B 都为 1 时，Q 才为 0。',
+ AND:'与门。只有 A、B 都为 1 时，Q 才为 1。',
+ OR:'或门。A、B 至少有一个为 1 时，Q 为 1。',
+ XOR:'异或门。A、B 不同时，Q 为 1。',
+ NOT:'非门。Q 与 A 相反。',
+ NOR:'或非门。只有 A、B 都为 0 时，Q 才为 1。',
+ XNOR:'同或门。A、B 相同时，Q 为 1。',
  CLOCK:'每推进一拍，CLK 在 0 和 1 之间切换。元件仍使用同一个全局时钟采样。',
  DELAY:'在全局时钟沿采样 D，并保持到下一拍。',
- REG:'EN 为 1 时，在全局时钟沿保存 D。',
- REG8:'EN 为 1 时，在全局时钟沿保存八位数据 D。',
- REG32:'EN 为 1 时，在全局时钟沿保存三十二位数据 D。',
- DEC3:'DIS 为 1 时，关闭全部输出。否则按地址选通 Y0–Y7 中的一路。',
- MUX:'S 为 0 时选 A，为 1 时选 B。',
- MUX8:'S 为 0 时选 A，为 1 时选 B，保留八位数据。',
- ALU8:'OP 选择传送、加法、减法或按位逻辑运算。',
+ REG:'寄存器在全局时钟沿更新。两个时钟沿之间，Q 保持已保存的值。',
+ DEC3:'地址由 A + 2×B + 4×C 得出，A 是最低位。',
+ MUX:'S 为 0 时把 A 接到 Q，为 1 时把 B 接到 Q。',
+ SPLIT:'把总线拆成独立的位。b0 是最低位。',
+ JOIN:'把各位合成一条总线。b0 是最低位。',
+ ADD8:'Q 输出 A + B 的低八位。', SUB8:'Q 输出 A − B 的低八位。',
+ AND8:'对 A、B 的每对对应位做与运算。', OR8:'对 A、B 的每对对应位做或运算。',
+ XOR8:'对 A、B 的每对对应位做异或。', NOT8:'对 A 的每个位取反。',
+ EQ8:'A、B 相等时，Q 为 1。', LT8:'按无符号数比较，A 小于 B 时，Q 为 1。',
+ SHL8:'A 左移一位，最低位补 0，移出的最高位舍弃。',
+ SHR8:'A 右移一位，最高位补 0，移出的最低位舍弃。',
+ TRI:'EN 为 1 时驱动 Q；EN 为 0 时输出浮空 Z。',
+ BUS:'把 A、B 合并到 Q。两路同时驱动且值不同时，Q 为 X，冲突引脚为 1。',
+ ALU8:'OP 为 0 到 5 时，依次执行传送 B、加、减、按位与、按位或、按位异或。结果保留低八位。',
  CONTROL:'从 IR 的高字节读取指令编号，再根据指令和 ACC 状态决定写回、跳转、访存和停机。',
+ ROM16:'ADR 选择一条 16 位指令，由 IR 输出。',
+ ROM32:'PC 是字节地址，每条指令占 4 字节。IR 输出对应的 32 位指令。',
  RAM8:'地址改变时读出对应字节，写入在全局时钟沿提交。',
  RAM32:'支持按 1、2 或 4 字节访问，写入在全局时钟沿提交。',
  SCREEN8:'地址低六位选择 8 × 8 屏幕中的像素。WE 为 1 时，时钟沿写入 RGB332 颜色。'
 };
+const componentRules={
+ MUX8:['S','Q 跟随 A','Q 跟随 B'],
+ REG:['EN','下一拍保持 Q','下一拍把 D 保存到 Q'],
+ DEC3:['DIS','地址对应的 Y 为 1，其余为 0','所有 Y 均为 0'],
+ RAM8:['WE','保持存储内容','下一拍把 DATA 写入 ADR'],
+ RAM32:['写入','保持存储内容','下一拍写入指定字节数'],
+ SCREEN8:['WE','保持像素颜色','下一拍写入该像素'],
+ TRI:['EN','Q 浮空（Z）','Q 跟随 D']
+};
+const truthTables=new WeakMap();
+function componentTruth(n,d){
+ if(!d.inputs.length||d.inputs.length>3||!d.outputs.length||d.outputs.length>4
+    ||[...d.inputs,...d.outputs].some(port=>port.width!==1)||d.signalAware||d.stateful)return null;
+ if(truthTables.has(d))return truthTables.get(d);
+ let evaluate=n.type==='CUSTOM'?null:d.evaluate;
+ if(n.type==='CUSTOM'){
+  const hasClockedNodes=circuit=>circuit.nodes.some(part=>part.type==='CUSTOM'?hasClockedNodes(part.spec.circuit):definition(part).stateful);
+  if(!hasClockedNodes(d.circuit)){
+   const model=compile(d.circuit.nodes,d.circuit.wires);
+   if(!model.error){
+    const initial=model.initial();
+    evaluate=input=>{
+     const result=model.evaluate(initial,Object.fromEntries(d.inputs.map((port,i)=>[port.id,input[i]])));
+     return d.outputs.map(port=>result.inputs(port.id)[0]);
+    };
+   }
+  }
+ }
+ let rows=null;
+ if(evaluate)rows=Array.from({length:2**d.inputs.length},(_,index)=>{
+  const input=d.inputs.map((_,i)=>(index>>(d.inputs.length-1-i))&1);
+  return [...input,...evaluate(input)];
+ });
+ if(rows?.some(row=>row.some(value=>value!==0&&value!==1)))rows=null;
+ truthTables.set(d,rows);
+ return rows;
+}
+function principleBit(value){
+ const bit=document.createElement('span');bit.className='principle-bit';
+ const label=document.createElement('span');label.className='bit-value';label.textContent=fmt(value);
+ bit.title=label.textContent;bit.append(signalLed(value),label);
+ return bit;
+}
+function renderComponentPrinciple(el,n,d,inputValues){
+ const section=inspectorColumn(el,'工作原理');
+ section.className+=' component-principle';
+ const base=n.type.replace(/\d+$/,'');
+ const note=document.createElement('p');
+ note.textContent=componentHelp[n.type]||componentHelp[base]||'此元件有 '+d.inputs.length+' 个输入和 '+d.outputs.length+' 个输出。可打开内部电路查看接法。';
+ section.append(note);
+ const truth=componentTruth(n,d),rule=componentRules[n.type]||componentRules[base];
+ if(!truth&&!rule)return;
+ const legend=document.createElement('div');legend.className='principle-legend';
+ legend.append(principleBit(0),'低电平',principleBit(1),'高电平');
+ section.append(legend);
+ if(rule){
+  const [pin,...behavior]=rule,index=d.inputs.findIndex(port=>port.name===pin);
+  const list=document.createElement('ul');list.className='principle-rules';
+  for(const [bit,description] of behavior.entries()){
+   const row=document.createElement('li');
+   const current=inputValues[index]===bit;
+   if(current){row.className='current';row.setAttribute('aria-current','true');}
+   row.append(pin,principleBit(bit),description);list.append(row);
+  }
+  section.append(list);
+  return;
+ }
+ const table=document.createElement('table');table.className='truth-table';table.setAttribute('aria-label','真值表');
+ const head=document.createElement('thead'),labels=document.createElement('tr'),corner=document.createElement('th');
+ corner.scope='col';corner.textContent='引脚';labels.append(corner);head.append(labels);
+ const current=truth.findIndex(row=>inputValues.every((value,i)=>row[i]===value));
+ const key=document.createElement('span');key.className='principle-current-label';
+ key.textContent=current>=0?'描边为当前输入':'当前输入不可用';
+ legend.append(key);
+ for(const [i] of truth.entries()){
+  const th=document.createElement('th');th.scope='col';th.textContent=i+1;
+  th.setAttribute('aria-label','组合 '+(i+1)+(i===current?'，当前输入':''));
+  if(i===current)th.className='current';
+  labels.append(th);
+ }
+ const body=document.createElement('tbody');
+ for(const [i,port] of [...d.inputs,...d.outputs].entries()){
+  const row=document.createElement('tr'),label=document.createElement('th');label.scope='row';
+  const output=i>=d.inputs.length;
+  if(i===d.inputs.length)row.className='truth-output';
+  label.textContent=(output?'输出 ':'输入 ')+port.name;
+  row.append(label);
+  for(const [j,example] of truth.entries()){
+   const td=document.createElement('td');
+   if(j===current)td.className='current';
+   td.append(principleBit(example[i]));row.append(td);
+  }
+  body.append(row);
+ }
+ table.append(head,body);section.append(table);
+}
 let memoryNode=null,memoryAddress=0;
 function inspectorColumn(el,title){
  const col=document.createElement('div');col.className='inspector-column';
@@ -778,21 +1113,24 @@ function renderInspector(){
   return;
  }
  const controls=inspectorColumn(el,n.label),d=definition(n);
- const note=document.createElement('p');
- note.textContent=componentHelp[n.type]||(n.type==='CUSTOM'?n.spec.circuit.nodes.length+' 个内部元件 · '+n.spec.circuit.wires.length+' 条内部连线':n.type);
- controls.append(note);
+ const inputWires=d.inputs.map((_,i)=>sourceOf(n.id,i));
+ const inputValues=inputWires.map(w=>w?wireValue(w):undefined);
+ renderComponentPrinciple(el,n,d,inputValues);
  const name=document.createElement('input');name.value=n.label;name.maxLength=32;
  name.onchange=()=>{checkpoint();n.label=name.value.slice(0,32)||n.type;name.value=n.label;persist();draw();};controls.append(field('元件名称',name));
- if(['IN','IN8','IN16','IN32','CONST','BIT'].includes(n.type)){
+ if((inputTypes.has(n.type)||n.type==='CONST')&&!externalInput(n)){
   const input=document.createElement('input');input.type='number';input.min=0;input.max=2**d.outputs[0].width-1;input.value=n.value;
-  input.onchange=()=>{const v=Number(input.value);if(!Number.isInteger(v)||v<0||v>Number(input.max)){notify('输入值超出范围');return;}checkpoint();n.value=v;focused=null;compileCurrent(false);persist();renderInspector();draw();};
+  input.onchange=()=>{setInputValue(n,Number(input.value));input.value=n.value??0;};
   controls.append(field('输入值',input));
-  if(d.outputs[0].width===1)controls.append(button('切换 0 / 1',()=>{checkpoint();n.value=1-(n.value||0);focused=null;compileCurrent(false);persist();renderInspector();draw();}));
+  if(d.outputs[0].width===1)controls.append(button('切换 0 / 1',()=>setInputValue(n,1-(n.value??0))));
  }
  if(n.type==='CUSTOM'){
+  const summary=document.createElement('p');
+  summary.textContent=d.circuit.nodes.length+' 个内部元件 · '+d.circuit.wires.length+' 条内部连线';
+  controls.append(summary);
   controls.append(button('打开内部电路副本',()=>{
    persist();const internal=clone(n.spec.circuit);
-   inspectionStack.push({levelId:level.id,doc:clone(doc),state:clone(state),ticks,records:clone(records),camera:{...camera},selected,mazeMapIndex,peripheral});
+   inspectionStack.push({levelId:level.id,doc:clone(doc),state:clone(state),ticks,records:clone(records),camera:{...camera},selected,mazeMapIndex,peripheral,light,studio});
    openLevel('sandbox',false,true);doc=internal;edit();$('title').textContent=n.label+' · 内部电路副本';$('description').textContent='可继续逐层打开。返回时保留上层电路和运行状态。';$('fit').click();
   }));
  }
@@ -810,7 +1148,7 @@ function renderInspector(){
  for(const [ports,isOutput,column] of [[d.inputs,false,inputs],[d.outputs,true,outputs]]){
   if(!ports.length){const empty=document.createElement('p');empty.textContent='无';column.append(empty);}
   for(const [i,p] of ports.entries()){
-   const w=isOutput?null:sourceOf(n.id,i),value=isOutput?values[n.id]?.[i]:w?wireValue(w):undefined;
+   const w=isOutput?null:inputWires[i],value=isOutput?values[n.id]?.[i]:inputValues[i];
    const row=document.createElement('div');row.className='pin-line';
    const detail=document.createElement('span');detail.textContent=p.name+' '+(isOutput?'→':'←')+' '+(w||isOutput?fmt(value,p.width):'未连接');
    const width=document.createElement('span');width.className='pin-count';width.textContent=p.width+' 位';
@@ -825,8 +1163,14 @@ function renderInspector(){
  controls.append(button('删除元件',removeSelected,'danger'));
 }
 function removeSelected(){
- if(!selected)return;checkpoint();const ids=new Set(multi);ids.add(selected);doc.nodes=doc.nodes.filter(n=>!ids.has(n.id));doc.wires=doc.wires.filter(w=>![w.id,w.from,w.to].some(id=>ids.has(id)));selected=null;pending=null;multi.clear();edit();
+ const ids=new Set(multi);if(selected)ids.add(selected);
+ if(!ids.size)return;
+ checkpoint();
+ doc.nodes=doc.nodes.filter(n=>!ids.has(n.id));
+ doc.wires=doc.wires.filter(w=>![w.id,w.from,w.to].some(id=>ids.has(id)));
+ selected=null;pending=null;multi.clear();edit();
 }
+$('delete-selection').onclick=removeSelected;
 function boardPoint(e){const p=new DOMPoint(e.clientX,e.clientY).matrixTransform(board.getScreenCTM().inverse());return {x:p.x,y:p.y};}
 function worldPoint(e){const p=boardPoint(e);return {x:(p.x-camera.x)/camera.scale,y:(p.y-camera.y)/camera.scale};}
 board.addEventListener('dragover',e=>{
@@ -890,15 +1234,18 @@ board.addEventListener('wheel',e=>{
 function step(render=true){
  if(net.error){stop();selected=net.node;notify(net.error);draw();return;}
  try{
-  if(peripheral?.done||mazeCycleLimitReached()){stop();return;}
+  if(peripheral?.done||mazeCycleLimitReached()||light?.output?.done){stop();return;}
   const overrides=level.machine==='symphony'&&pendingKeys.length?{keyboard:pendingKeys[0]}:{};
   if(peripheral)overrides.input=peripheral.input;
+  if(studio?.link)Object.assign(overrides,studio.link.inputs);
   if(level.machine&&net.incoming.has('strobe')&&net.incoming.has('output')){
    const before=net.evaluate(state,overrides);
    if(before.inputs('strobe')[0]){
     const value=before.inputs('output')[0];terminal=(terminal+' '+value).trim().slice(-500);
     if(peripheral){peripheral.write(value);if(peripheral.done)stop();}
+    if(level.demo==='rhythm'&&!workshopEditing)playStudioNotes(value);
    }
+   if(studio?.link&&net.incoming.has('rx-strobe')&&net.incoming.has('rx-output'))studio.link.sample(before);
    if(level.machine==='symphony'&&before.values.screen&&before.inputs('screen')[0]){
     const setting=before.values.b?.[0];if(setting<5)deviceScreen[setting]=before.values.operand?.[0]||0;
    }
@@ -907,6 +1254,10 @@ function step(render=true){
   const result=net.tick(state,overrides);state=result.state;ticks++;
   const live=peripheral&&overrides.input!==peripheral.input?net.evaluate(state,{...overrides,input:peripheral.input}):result;
   values=live.values;
+  if(light){
+   sampleLight(live);
+   if(light.output?.done)stop();
+  }
   if(mazeCycleLimitReached())stop();
   if(Game.isComputer(level)){
    for(const w of result.writes){
@@ -975,8 +1326,9 @@ function exhaustiveWidths(){
  const total=widths.reduce((a,b)=>a+b,0);
  return widths.every(Boolean)&&total<=16?widths:null;
 }
-function recordPass(){
- completed[level.id]=true;focused=null;
+function recordPass(total,exhaustive=false){
+ focused=null;
+ let reward='';
  if(level.inputs&&level.outputs){
   try{
    const spec=Circuit.encapsulate(doc,level.courseName||level.title);spec.courseId=level.id;
@@ -985,14 +1337,25 @@ function recordPass(){
     ports.sort((a,b)=>(order.get(a.id)??Infinity)-(order.get(b.id)??Infinity));
    }
    const index=library.findIndex(item=>item.courseId===level.id);
-   if(index>=0)library[index]=spec;else if(library.length<100)library.push(spec);
-   renderPalette();
+   if(index>=0||library.length<100){
+    library[index>=0?index:library.length]=spec;
+    reward='已封装为「'+spec.name+'」，后续允许使用它的关卡可以直接复用。';
+    renderPalette();
+   }
   }catch{/* A valid large interface may exceed the chip packaging limit. */}
  }
- if(level.id==='cpu-build')saved['machine-cm8']=clone(doc);
- if(level.id.endsWith('-budget'))doc.bestArea=Math.min(doc.bestArea??Infinity,net.expandedCount);
- persist();renderNav();renderTests();
- $('hint').textContent=level.id.endsWith('-budget')?'已通过全部预算测试。最小通过规模：'+doc.bestArea+' 个展开元件。':'全部通过。可进入下一关，或打开世界地图选择实验。';
+ if(level.id==='cpu-build'){
+  saved['machine-cm8']=clone(doc);
+  reward='你的 CM8 已保存，首次进入后续 CM8 编程关时可以用它运行程序。';
+ }
+ if(level.id.endsWith('-budget')){
+  doc.bestArea=Math.min(doc.bestArea??Infinity,net.expandedCount);
+  reward='本次使用 '+net.expandedCount+' 个展开元件，最小通过规模为 '+doc.bestArea+' 个。';
+ }
+ renderTests();
+ const detail=total+' / '+total+(exhaustive?' 组穷举输入符合预期':' 组测试通过');
+ $('hint').textContent=reward||detail+'。';
+ completeLevel(detail,reward);
 }
 function courseViolation(){
  if(!guided||!level.courseParts)return null;
@@ -1008,6 +1371,7 @@ function courseViolation(){
 $('exhaustive').onclick=async()=>{
  showDetails('verify');
  const widths=exhaustiveWidths();if(!widths)return;
+ renderPassStatus();
  if(net.error){notify(net.error);return;}
  const violation=courseViolation();if(violation){notify(violation);return;}
  if(!level.outputs.every(id=>net.incoming.has(id)&&net.incoming.get(id).length)){notify('请保留关卡输出端口');return;}
@@ -1026,11 +1390,12 @@ $('exhaustive').onclick=async()=>{
   last={input,actual,expected,pass:actual.every((v,i)=>v===expected[i])};
   if(!last.pass){testCases=[last];replay(0);notify('找到反例，已检查 '+(row+1)+' 组输入');return;}
  }
- testCases=[last];recordPass();
+ testCases=[last];recordPass(total,true);
  $('results').textContent='全部 '+total+' 组输入符合预期。';
 };
 $('test').onclick=async()=>{
  showDetails('verify');
+ renderPassStatus();
  const attempt=++testAttempt,testingNet=net;
  stop();
  if(net.error){selected=net.node;draw();notify(net.error);return;}
@@ -1067,7 +1432,7 @@ $('test').onclick=async()=>{
  }
  const failure=testCases.findIndex(c=>!c.pass);
  if(failure<0){
-  recordPass();notify('✓ 实验验证通过');
+  recordPass(testCases.length);
  }
  else replay(failure);
 };
@@ -1121,12 +1486,23 @@ function zoomCenter(factor){
 }
 $('zoom-in').onclick=()=>zoomCenter(1.2);
 $('zoom-out').onclick=()=>zoomCenter(1/1.2);
+function syncProgramSource(){
+ $('program').value=programTarget==='receiver'
+  ?doc.receiverDraft??doc.receiverSource??level.receiver??''
+  :doc.draftSource??doc.source??level.program??'';
+}
+$('workshop-program-target').onchange=()=>{programTarget=$('workshop-program-target').value;syncProgramSource();};
 $('assemble').onclick=()=>{
  try{
   const o8=level.machine==='overture';
   const result=o8?Game.overture.assemble($('program').value,$('isa-rules').value):level.machine==='symphony'?Game.symphony.assemble($('program').value):Circuit.assemble($('program').value);
-  const rom=doc.nodes.find(n=>n.id==='rom'&&['ROM16','ROM32'].includes(n.type));if(!rom)throw Error('缺少程序 ROM');
-  checkpoint();rom.program=result.words;doc.source=$('program').value;delete doc.draftSource;if(o8){doc.isa=$('isa-rules').value;delete doc.draftIsa;}edit();notify('已加载 '+result.words.length+' 条指令，状态已复位');
+  const receiving=programTarget==='receiver',id=receiving?'rx-rom':'rom';
+  const rom=doc.nodes.find(n=>n.id===id&&['ROM16','ROM32'].includes(n.type));if(!rom)throw Error('缺少程序 ROM · '+id);
+  checkpoint();rom.program=result.words;
+  if(receiving){doc.receiverSource=$('program').value;delete doc.receiverDraft;}
+  else{doc.source=$('program').value;delete doc.draftSource;}
+  if(o8){doc.isa=$('isa-rules').value;delete doc.draftIsa;}
+  edit();notify('已加载 '+result.words.length+' 条指令，状态已复位');
  }catch(e){notify(e.message);}
 };
 $('export').onclick=()=>{
@@ -1150,11 +1526,14 @@ $('file').onchange=async()=>{
   const circuit=Circuit.unpackBlueprint(data);
   const checked=compile(circuit.nodes,circuit.wires);
   if(checked.error&&!checked.error.includes('未连接')&&!checked.error.includes('组合反馈'))throw Error(checked.error);
-  openLevel(Game.levels.some(l=>l.id===data.level)?data.level:'sandbox');checkpoint();doc=clone(circuit);edit();$('fit').click();notify('蓝图已导入');
+ openLevel(Game.levels.some(l=>l.id===data.level)?data.level:'sandbox');checkpoint();doc=clone(circuit);
+ if(Game.isComputer(level))syncProgramSource();
+ edit();$('fit').click();notify('蓝图已导入');
  }catch(e){notify('导入失败：'+e.message);}
  $('file').value='';
 };
 document.addEventListener('keydown',e=>{
+ if(document.querySelector?.('dialog[open]'))return;
  if(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;
  if(e.key==='Escape'){pending=null;selected=null;multi.clear();draw();}
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='c'){
@@ -1180,7 +1559,7 @@ $('back-circuit').onclick=()=>{
  const parent=inspectionStack.pop();
  openLevel(parent.levelId,false,true);
  doc=parent.doc;compileCurrent();
- ({state,ticks,records,camera,selected,mazeMapIndex,peripheral}=parent);
+ ({state,ticks,records,camera,selected,mazeMapIndex,peripheral,light,studio}=parent);
  if(level.workshop==='maze')$('maze-map').value=String(mazeMapIndex);
  if(level.workshop)setWorkshopView(true);
  if(!net.error)values=net.evaluate(state,peripheral?{input:peripheral.input}:{}).values;
@@ -1197,7 +1576,8 @@ $('cancel-package').onclick=()=>$('package-dialog').close();
 $('save-package').onclick=()=>{
  try{if(library.length>=100)throw Error('元件库最多 100 项，请先导出备份');const spec=Circuit.encapsulate(doc,$('package-name').value);library.push(spec);persist();renderPalette();$('package-dialog').close();notify('已保存 '+spec.name+'，现在可在元件栏复用');}catch(e){notify(e.message);}
 };
-function download(data,name){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+function downloadFile(text,name,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+function download(data,name){downloadFile(JSON.stringify(data,null,2),name,'application/json');}
 $('backup').onclick=()=>{persist();download({kind:'CircuitMind-save',version:3,saved,completed,library,last:level.id},'CircuitMind-save.json');};
 function showWorld(){
  const container=$('world-map');container.replaceChildren();let chapter='',section;
@@ -1208,25 +1588,302 @@ function showWorld(){
  $('world').showModal();
 }
 $('home').onclick=showWorld;$('close-world').onclick=()=>$('world').close();
+const {originals:workshopWorks,guides:workshopGuides,markdown:workshopMarkdown,wiring:workshopWiring,buildIntro:workshopIntro}=Game.workshopGuides;
+const kit=Game.workshopKit;
+function studioNeeds(){
+ if(net.error)return net.error;
+ if(!state.ram||!doc.nodes.some(n=>n.id==='rom'))return '请接好 ROM 和 RAM 接口。';
+ if(level.demo==='shell'&&!state.storage)return '请接好外存接口 storage。';
+ if(level.demo==='link'&&(!state['rx-ram']||!['strobe','output','rx-strobe','rx-output'].every(id=>net.incoming.has(id))))
+  return '请接好两台 CPU 各自的 RAM、输出和输出有效端口。';
+ if(level.demo==='rhythm'&&!['strobe','output'].every(id=>net.incoming.has(id)))return '请接好 OUT 和输出有效端口。';
+ return '';
+}
+function studioAutomatic(){return ['lander','cube','rhythm'].includes(level.demo);}
+function studioBusy(){return !!state.ram?.[kit.command];}
+function studioResult(){return level.demo==='lander'?state.ram?.[kit.model+10]||0:0;}
+function queueStudio(value){
+ const missing=studioNeeds();
+ if(missing){studio.status=missing;renderStudio();return false;}
+ if(studioBusy()||studioResult())return false;
+ const memory={...state.ram,[kit.command]:value};
+ if(level.demo==='cube')for(let i=0;i<kit.screenWidth*kit.screenHeight;i++)delete memory[kit.framebuffer+i];
+ state.ram=memory;
+ studio.budget=ticks+24000;studio.status='';
+ return true;
+}
+function queueStudioFrame(){
+ return queueStudio(level.demo==='lander'?16|(studio.mask|studio.keys):level.demo==='rhythm'?65:1);
+}
+function startStudio(auto=false){
+ if(timer)return;
+ const missing=studioNeeds();
+ if(missing){studio.status=missing;renderStudio();return;}
+ studio.auto=auto;
+ if(studioBusy())studio.budget=ticks+24000;
+ timer=setInterval(()=>{
+  const now=performance.now();
+  if(studio.auto&&!studioBusy()&&now>=studio.nextAt&&!studioResult()){
+   queueStudioFrame();
+   const interval=level.demo==='rhythm'?Number($('studio-tempo').value):level.demo==='lander'?140:220;
+   studio.nextAt=now+interval;
+  }
+  for(let i=0;i<512&&studioBusy()&&performance.now()<now+11&&timer;i++){
+   const previous=ticks;step(false);
+   if(ticks===previous||ticks>=studio.budget&&studioBusy()){
+    studio.status='CPU 尚未清除命令。可切换到电路与汇编检查。';stop();break;
+   }
+  }
+  if(studioResult()||(!studioBusy()&&!studio.auto))stop();
+  draw();
+ },16);
+ syncClock();renderStudio();
+}
+function sendStudio(value){if(queueStudio(value))startStudio();}
+function tryStudioAudio(){
+ try{
+  const Audio=window.AudioContext||window.webkitAudioContext;
+  if(!Audio)return;
+  studioAudio??=new Audio();
+  studioAudio.resume().catch(()=>{});
+ }catch{/* The lamps still show the CPU output without an audio device. */}
+}
+function playStudioNotes(mask){
+ if(studioAudio?.state!=='running')return;
+ for(let i=0;i<8;i++)if(mask&(1<<i)){
+  const voice=studioAudio.createOscillator(),gain=studioAudio.createGain(),time=studioAudio.currentTime;
+  const frequency=[85,135,185,245,330,440,660,880][i];
+  voice.type=i%2?'triangle':'sine';
+  voice.frequency.setValueAtTime(frequency*1.65,time);
+  voice.frequency.exponentialRampToValueAtTime(frequency,time+.045);
+  gain.gain.setValueAtTime(.055,time);gain.gain.exponentialRampToValueAtTime(.001,time+.13);
+  voice.connect(gain);gain.connect(studioAudio.destination);voice.start(time);voice.stop(time+.14);
+ }
+}
+function studioGrid(label,interactive){
+ const grid=document.createElement('div');grid.className='studio-grid';grid.setAttribute('role','group');grid.setAttribute('aria-label',label);
+ for(let i=0;i<64;i++){
+  const cell=interactive?button('',()=>{
+   if(level.demo==='rhythm')sendStudio(i+1);
+   else if(!studioBusy()){state.ram={...state.ram,[kit.data+(i>>3)]:(state.ram?.[kit.data+(i>>3)]||0)^(1<<(i&7))};draw();}
+  }):document.createElement('span');
+  if(interactive){cell.type='button';cell.setAttribute('aria-label','第 '+((i>>3)+1)+' 行第 '+((i&7)+1)+' 列');}
+  else cell.setAttribute('aria-hidden','true');
+  grid.append(cell);
+ }
+ return grid;
+}
+function prepareStudio(){
+ const display=$('studio-display'),extra=$('studio-extra');
+ display.replaceChildren();extra.replaceChildren();
+ $('studio-next-frame').hidden=!studioAutomatic();
+ if(level.demo==='lander'||level.demo==='cube'){
+  const canvas=document.createElement('canvas');
+  canvas.width=kit.screenWidth;canvas.height=kit.screenHeight;
+  canvas.setAttribute('aria-label',level.demo==='lander'?'飞船像素屏':'立方体像素屏');
+  canvas.className='studio-screen';canvas.id='studio-screen';display.append(canvas);
+ }
+ if(level.demo==='lander'){
+  for(const [label,mask] of [['左移',2],['推力',1],['右移',4]]){
+   const control=button(label,()=>{studio.mask^=mask;renderStudio();});
+   control.id='studio-move-'+mask;control.type='button';extra.append(control);
+  }
+ }else if(level.demo==='link'){
+  for(const [label,id,editable] of [['发送端','studio-image-left',true],['接收端','studio-image-right',false]]){
+   const area=document.createElement('section'),heading=document.createElement('h3');
+   heading.textContent=label;
+   const grid=studioGrid(label,editable);grid.id=id;
+   area.append(heading,grid);display.append(area);
+  }
+  extra.append(button('发送',()=>sendStudio(1),'primary'),button('翻转下一帧的一位',()=>{studio.link.corrupt();renderStudio();}));
+ }else if(level.demo==='rhythm'){
+  const grid=studioGrid('八条音轨，每行八步',true);grid.id='studio-pattern';display.append(grid);
+  const speed=document.createElement('select');speed.id='studio-tempo';
+  for(const [v,label] of [[150,'快'],[240,'中'],[410,'慢']]){
+   const entry=document.createElement('option');entry.value=v;entry.textContent=label;speed.append(entry);
+  }
+  speed.value='240';extra.append(field('速度',speed));
+ }else if(level.demo==='shell'){
+  const terminal=document.createElement('pre');terminal.id='studio-terminal';terminal.setAttribute('aria-label','终端输出');
+  const form=document.createElement('form');form.className='actions studio-command';
+  const input=document.createElement('input');input.maxLength=40;input.setAttribute('aria-label','命令');input.placeholder='ls / cat readme.txt / run count.bin';input.autocomplete='off';input.spellcheck=false;
+  const submit=document.createElement('button');submit.type='submit';submit.textContent='执行';
+  form.append(input,submit);display.append(terminal,form);
+  form.onsubmit=e=>{
+   e.preventDefault();const value=input.value.trim();
+   if(!/^[ -~]{1,40}$/.test(value)){studio.status='请输入 1–40 个 ASCII 字符。';renderStudio();return;}
+   if(!queueStudio(value.length))return;
+   Array.from(value,(c,i)=>state.ram[kit.data+i]=c.charCodeAt(0));
+   input.value='';startStudio();
+  };
+ }
+ display.className='studio-display '+(level.demo==='link'?'studio-link':'');
+}
+function paintStudioFrame(canvas,memory,landing){
+ const {screenWidth:width,screenHeight:height,framebuffer}=kit;
+ if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
+ const ctx=canvas.getContext('2d');if(!ctx)return;
+ ctx.fillStyle='#141d2d';ctx.fillRect(0,0,width,height);
+ if(landing){
+  ctx.fillStyle='#526681';
+  for(let i=0;i<24;i++)ctx.fillRect((i*23+5)%width,(i*13+2)%39,1,1);
+  ctx.fillStyle='#43536b';ctx.fillRect(0,45,width,3);ctx.fillStyle='#79d4a2';ctx.fillRect(24,45,17,1);
+ }
+ for(let i=0;i<width*height;i++){
+  const pixel=memory[framebuffer+i];if(!pixel)continue;
+  ctx.fillStyle='rgb('+((pixel>>>5)*255/7)+','+(((pixel>>>2)&7)*255/7)+','+((pixel&3)*85)+')';
+  ctx.fillRect(i%width,Math.floor(i/width),1,1);
+ }
+}
+function studioText(memory){
+ let output='';
+ for(let addr=0x5400;addr<=0x5aff&&memory[addr];addr++)output+=String.fromCharCode(memory[addr]);
+ return output;
+}
+function renderStudio(){
+ const memory=state.ram||{},model=kit.model;
+ const run=$('studio-run'),next=$('studio-next-frame'),single=$('studio-step');
+ run.disabled=!!studioResult()||!studioAutomatic()&&!studioBusy();
+ run.textContent=timer?'暂停':studioAutomatic()?'播放':'继续处理';
+ next.disabled=!!timer||studioBusy()||!!studioResult();single.disabled=!!timer||!!studioResult();
+ const status=$('studio-status'),registers=$('studio-registers');
+ let detail='CPU 周期 '+ticks,message=studio.status||(studioBusy()?'CPU 正在处理输入。':'');
+ if(level.demo==='lander'||level.demo==='cube')paintStudioFrame($('studio-screen'),memory,level.demo==='lander');
+ if(level.demo==='lander'){
+  const word=offset=>Array.from({length:4},(_,i)=>(memory[offset+i]||0)<<(i*8)).reduce((a,b)=>a|b,0);
+  for(const mask of [1,2,4])$('studio-move-'+mask).setAttribute('aria-pressed',String(!!((studio.mask|studio.keys)&mask)));
+  if(ticks>0)detail+=' · 高度 '+(word(model)/16).toFixed(1)+' · 下落速度 '+(word(model+4)/16).toFixed(2)+' · 燃料 '+(memory[model+8]||0);
+  message=message||(studioResult()===1?'着陆成功！':studioResult()===2?'着陆失败，按复位重试。':'方向键 ← ↑ → 控制横移与推力。');
+ }else if(level.demo==='cube'){
+  detail+=' · 下一角度 '+(memory[model]||0)+' / 16';
+ }else if(level.demo==='rhythm'){
+  const column=memory[model+64];
+  Array.from($('studio-pattern').children).forEach((cell,i)=>{
+   cell.className=i%8===column?'playhead':'';
+   cell.setAttribute('aria-pressed',String(!!memory[model+i]));
+  });
+  detail+=' · 音轨掩码 '+fmt(memory[model+65]||0,8);
+ }else if(level.demo==='link'){
+  for(const [id,ram,editable] of [['studio-image-left',memory,true],['studio-image-right',state['rx-ram']||{},false]]){
+   Array.from($(id).children).forEach((cell,i)=>{
+    const lit=!!(ram[kit.data+(i>>3)]&(1<<(i&7)));
+    if(editable)cell.setAttribute('aria-pressed',String(lit));else cell.className=lit?'lit':'';
+   });
+  }
+  detail+=' · 已确认 '+(memory[model+16]||0)+' / 8 行 · 重发 '+(memory[model+17]||0)+' 次';
+  message=studio.status||(studio.link.armed?'下一帧会被翻转一位。':studioBusy()?'发送中。':memory[model+16]===8?'八行已接收。':'在左屏画图，再点发送。');
+ }else if(level.demo==='shell'){
+  const console=$('studio-terminal');
+  const output=studioText(memory);
+  if(console.textContent!==output){console.textContent=output;console.scrollTop=console.scrollHeight;}
+ }
+ registers.textContent=detail;
+ if(status.textContent!==message)status.textContent=message;
+ status.className=studioResult()===1?'workshop-win':'';
+}
+$('studio-run').onclick=()=>{
+ if(timer){stop();draw();return;}
+ if(level.demo==='rhythm')tryStudioAudio();
+ startStudio(studioAutomatic());
+};
+$('studio-next-frame').onclick=()=>{if(level.demo==='rhythm')tryStudioAudio();if(queueStudioFrame())startStudio();};
+$('studio-step').onclick=()=>{
+ if(!studioBusy()&&studioAutomatic()&&!queueStudioFrame())return;
+ if(level.demo==='rhythm')tryStudioAudio();
+ step();
+};
+$('studio-reset').onclick=()=>{stop();compileCurrent();draw();};
+function landerKey(e,pressed){
+ if(level.demo!=='lander'||workshopEditing||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)||document.querySelector?.('dialog[open]'))return;
+ const mask={ArrowUp:1,ArrowLeft:2,ArrowRight:4}[e.key];if(!mask)return;
+ e.preventDefault();
+ studio.keys=pressed?studio.keys|mask:studio.keys&~mask;
+ renderStudio();
+}
+document.addEventListener('keydown',e=>landerKey(e,true));
+document.addEventListener('keyup',e=>landerKey(e,false));
 $('workshop').onclick=()=>{
- const works=Game.levels.filter(l=>l.workshop);
- $('workshop-works').replaceChildren(...works.map(work=>{
+ $('workshop-works').replaceChildren(...workshopWorks.map(work=>{
   const card=document.createElement('section');card.className='panel workshop-work';
   const name=document.createElement('h3');name.textContent=work.title;
   const description=document.createElement('p');description.textContent=work.text;
   const play=button('试玩'+work.title,()=>{
    $('workshop-dialog').close();
-   if(level===work){setWorkshopView(false);draw();}
+   if(level===work){if(studio||light)stop();setWorkshopView(false);draw();}
    else openLevel(work.id);
    $('workshop-view').focus();
   },'primary');
-  card.append(name,description,play);return card;
+  const actions=document.createElement('div');actions.className='actions';
+  const guide=button('技术说明与搭建',()=>{$('workshop-dialog').close();showWorkshopGuide(work);});
+  actions.append(play,guide);card.append(name,description,actions);return card;
  }));
  $('workshop-dialog').showModal();
 };
 $('close-workshop').onclick=()=>$('workshop-dialog').close();
+$('close-workshop-guide').onclick=()=>$('workshop-guide-dialog').close();
+$('workshop-guide').onclick=()=>{
+ const work=workshopWorks.find(entry=>entry.id===(level.workshopBuildOf||level.id));
+ if(work)showWorkshopGuide(work);
+};
+function placeWorkshopParts(work,all){
+ const reserved=new Set(work.workshop==='light'?[...lightKit.inputIds,...lightKit.outputIds]:['pc','rom','ram','input','output','strobe','keyboard','storage','screen']);
+ const ids=new Set(doc.nodes.map(n=>n.id));
+ const nodes=work.build().nodes.filter(n=>(all||reserved.has(n.id.replace(/^rx-/,'')))&&!ids.has(n.id));
+ if(!nodes.length){notify('所需元件已在画布上');return;}
+ if(doc.nodes.length+nodes.length>500){notify('画布最多 500 个元件');return;}
+ checkpoint();
+ for(const node of nodes){
+  delete node.program;
+  if(all)node.label=node.id;
+  doc.nodes.push(node);
+ }
+ edit();$('fit').click();
+}
+function showWorkshopGuide(work){
+ const guide=workshopGuides[work.id],dialog=$('workshop-guide-dialog');
+ if(!guide)return;
+ $('workshop-guide-title').textContent=work.title;
+ const content=$('workshop-guide-content');content.replaceChildren();
+ function add(tag,text,parent=content){
+  const el=document.createElement(tag);el.textContent=text;parent.append(el);return el;
+ }
+ add('h3','技术说明');
+ const flow=add('ol','');flow.className='workshop-flow';
+ guide.flow.forEach(label=>add('li',label,flow));
+ add('p',guide.tech);
+ const ports=add('ul','');guide.ports.forEach(item=>add('li',item,ports));
+ add('h3','从空白搭建');
+ add('p',guide.intro||workshopIntro);
+ const steps=add('ol','');guide.steps.forEach(item=>add('li',item,steps));
+ add('h3','检验结果');add('p',guide.check);
+ add('h3','练习');add('p',guide.challenge);
+ const connections=add('details','');
+ add('summary','查看参考接线表',connections);
+ add('pre',workshopWiring(work),connections);
+ if(work.program){
+  const notes=add('details','');
+  add('summary','查看参考汇编',notes);
+  if(work.receiver)add('h3','发送端',notes);
+  add('pre',work.program,notes);
+  if(work.receiver){add('h3','接收端',notes);add('pre',work.receiver,notes);}
+ }
+ const inBuild=level.workshopBuildOf===work.id;
+ $('workshop-guide-actions').replaceChildren(
+  button('查看作品电路',()=>{dialog.close();if(level===work){if(studio||light)stop();setWorkshopView(true);$('fit').click();}else openLevel(work.id,false,false,true);}),
+  button(inBuild?'放入接口端口':'从空白画布搭建',()=>{
+   dialog.close();
+   if(inBuild){setWorkshopView(true);placeWorkshopParts(work,false);}
+   else{openLevel(work.id+'-build',false,false,true);persist();}
+  },'primary'),
+  ...(inBuild?[button('放入未连线的参考元件',()=>{dialog.close();setWorkshopView(true);placeWorkshopParts(work,true);})]:[]),
+  button('下载教程',()=>downloadFile(workshopMarkdown(work),'CircuitMind-'+work.id+'.md','text/markdown;charset=utf-8')),
+  button('下载参考蓝图',()=>download({kind:'CircuitMind-blueprint',version:3,level:work.id,...Circuit.packBlueprint(work.build())},'CircuitMind-'+work.id+'.json'))
+ );
+ dialog.showModal();
+}
 $('workshop-view').onclick=()=>{
  if(!level.workshop)return;
+ if(studio||light)stop();
  setWorkshopView(!workshopEditing);
  if(workshopEditing)$('fit').click();else draw();
 };
@@ -1249,7 +1906,10 @@ $('use-machine').onclick=()=>{
  if(rom?.type!==(cpu32?'ROM32':'ROM16')||!['pc','input','output','strobe'].every(id=>net.incoming.has(id))){notify('保留本架构的 PC、程序 ROM、输入、输出与输出有效端口后再登记。');return;}
  saved['machine-'+level.machine]=clone(doc);persist();notify('已登记。首次进入本架构的编程关卡时，会将关卡程序装入这台机器。');
 };
-$('program').oninput=()=>{doc.draftSource=$('program').value;persist();};
+$('program').oninput=()=>{
+ if(programTarget==='receiver')doc.receiverDraft=$('program').value;else doc.draftSource=$('program').value;
+ persist();
+};
 $('isa-rules').oninput=()=>{doc.draftIsa=$('isa-rules').value;persist();};
 function renderDebugger(){
  const rom=doc.nodes.find(n=>n.id==='rom');debug.replaceChildren();if(!rom)return;
@@ -1265,6 +1925,7 @@ function renderDebugger(){
 }
 function renderScreen(){
  display.hidden=usesMineDevice()||level.id==='mines';if(display.hidden)return;
+ if(level.demo==='lander'||level.demo==='cube'){paintStudioFrame(display,state.ram||{},level.demo==='lander');return;}
  const ctx=display.getContext('2d');if(!ctx)return;
  if(level.machine==='symphony'){
   const ram=state.ram||{},mode=deviceScreen[0]||0,offset=(deviceScreen[1]||0)&65535;

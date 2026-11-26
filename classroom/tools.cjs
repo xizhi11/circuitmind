@@ -1,6 +1,6 @@
 'use strict';
 const C=require('./dist/circuit.js');
-global.Circuit=C;require('./dist/levels.js');require('./dist/campaign.js');require('./dist/references.js');require('./dist/overture.js');require('./dist/symphony.js');require('./dist/mines32.js');require('./dist/course.js');require('./dist/devices.js');
+global.Circuit=C;require('./dist/levels.js');require('./dist/campaign.js');require('./dist/references.js');require('./dist/overture.js');require('./dist/symphony.js');require('./dist/mines32.js');require('./dist/course.js');require('./dist/devices.js');require('./dist/workshop.js');require('./dist/light-workshop.js');require('./dist/workshop-guides.js');
 function execute(tool,request){
  const {circuit,inputs={},state}=request;
  C.validate(circuit);
