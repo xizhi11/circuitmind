@@ -366,16 +366,10 @@ $('tool-check').onclick=async()=>{
  }catch(e){notify('工具调用失败：'+e.message+'。请通过 start.cmd 打开游戏。');}finally{control.disabled=false;}
 };
 let mentorSession;
-function showMentorAccess(joined){
- $('mentor-form').hidden=!joined;
- $('mentor-join').hidden=joined;
- if(!joined&&$('mentor-dialog').open)$('mentor-code').focus();
-}
-$('ask-mentor').onclick=async()=>{
+$('ask-mentor').onclick=()=>{
  const fileMode=location.protocol==='file:';
  const staticSite=location.hostname.endsWith('.github.io');
- $('mentor-form').hidden=true;
- $('mentor-join').hidden=true;
+ $('mentor-form').hidden=fileMode||staticSite;
  $('mentor-file-help').hidden=!fileMode;
  if(mentorSession?.levelId!==level.id){
   mentorSession={levelId:level.id};
@@ -386,39 +380,9 @@ $('ask-mentor').onclick=async()=>{
  }
  if(staticSite)$('mentor-status').textContent='这个 GitHub Pages 版本暂未连接导师，请使用本地游戏。';
  $('mentor-dialog').showModal();
- if(fileMode||staticSite)return;
- if($('mentor-send').disabled){showMentorAccess(true);return;}
- const status=$('mentor-status');
- status.textContent='正在连接导师…';
- try{
-  const response=await fetch('/api/classroom',{signal:AbortSignal.timeout(15000)});
-  if(response.status===404){showMentorAccess(true);status.textContent='';return;}
-  if(!response.ok)throw Error('暂时无法连接导师，请关闭窗口后重试。');
-  const access=await response.json();
-  showMentorAccess(!access.required||access.joined);
-  status.textContent='';
- }catch(e){status.textContent=e.message;}
+ if(!fileMode&&!staticSite&&!$('mentor-send').disabled)$('mentor-question').focus();
 };
 $('close-mentor').onclick=()=>$('mentor-dialog').close();
-
-$('mentor-join').onsubmit=async event=>{
- event.preventDefault();
- const control=$('mentor-join-button'),field=$('mentor-code'),status=$('mentor-status');
- if(control.disabled)return;
- control.disabled=true;
- try{
-  const response=await fetch('/api/classroom',{
-   method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:field.value.trim()}),
-   signal:AbortSignal.timeout(15000)
-  });
-  const access=await response.json();
-  if(!response.ok||!access.joined)throw Error(access.error||'暂时无法加入班级。');
-  field.value='';
-  showMentorAccess(true);
-  $('mentor-question').focus();
-  status.textContent='';
- }catch(e){status.textContent=e.message;}finally{control.disabled=false;}
-};
 
 function appendMentorMessage(label,text,className){
  const message=document.createElement('p');
@@ -472,11 +436,10 @@ $('mentor-form').onsubmit=async event=>{
    signal:AbortSignal.timeout(150000)
   });
   const result=await response.json().catch(()=>null);
-  if(response.status===401&&mentorSession===session){
+  if(response.status===409&&mentorSession===session){
    session.conversationId=undefined;
    $('mentor-log').replaceChildren();
-   showMentorAccess(false);
-   status.textContent=result?.error||'请重新输入班级邀请码。';
+   status.textContent=result?.error||'原导师会话已失效，请重新发送问题。';
    return;
   }
   if(!response.ok){

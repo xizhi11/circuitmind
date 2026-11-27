@@ -7,11 +7,12 @@ const {createClassroom}=require('./classroom.cjs');
 const host=process.env.CIRCUITMIND_HOST||'127.0.0.1';
 const port=Number(process.env.PORT||4173);
 const loopback=host==='127.0.0.1'||host==='localhost';
-const classroom=createClassroom({
-  inviteCode:process.env.CIRCUITMIND_CLASSROOM_CODE,
+// Existing classroom services may still have the legacy setting until Blueprint sync.
+const classroomEnabled=process.env.CIRCUITMIND_PUBLIC_CLASSROOM==='true'||!!process.env.CIRCUITMIND_CLASSROOM_CODE;
+const classroom=classroomEnabled?createClassroom({
   origin:process.env.CIRCUITMIND_PUBLIC_ORIGIN||process.env.RENDER_EXTERNAL_URL||(loopback?`http://${host}:${port}`:undefined)
-});
-if(!loopback&&!classroom&&!process.env.CIRCUITMIND_API_TOKEN)throw Error('对外监听需要配置班级邀请码或服务端 Bearer Token');
+}):null;
+if(!loopback&&!classroom&&!process.env.CIRCUITMIND_API_TOKEN)throw Error('对外监听需要配置公开班级模式或服务端 Bearer Token');
 if(!loopback&&classroom&&!classroom.origin.startsWith('https://'))throw Error('公网班级试玩需要配置 HTTPS 地址');
 if(classroom&&!process.env.HIAGENT_API_KEY?.trim())throw Error('班级试玩需要配置 HIAGENT_API_KEY');
 const api=createApi({mentor:localRenderMentor(),classroom,...(classroom?{token:''}:{})});

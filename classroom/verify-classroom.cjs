@@ -7,10 +7,9 @@ const {createClassroom}=require('./classroom.cjs');
 
 async function main(){
  const origin='https://classroom.example.com';
- const inviteCode='test-invite-123456';
  const mentorCalls=[];
  let mentorUnavailable=false;
- const classroom=createClassroom({inviteCode,origin});
+ const classroom=createClassroom({origin});
  const api=createApi({token:'',classroom,mentor:async request=>{
   if(mentorUnavailable)throw Object.assign(Error('导师服务暂时不可用'),{status:502});
   mentorCalls.push(request);
@@ -31,20 +30,14 @@ async function main(){
  const join='/api/classroom',chat='/api/mentor/chat';
  const question='我的 NAND 为什么没通过？';
  try{
-  assert.deepEqual((await call(join)).data,{required:true,joined:false});
-  assert.equal((await call(chat,{body:{question}})).status,401);
-  assert.equal((await call(join,{body:{code:'incorrect-code'}})).status,403);
-  assert.equal((await call(join,{body:{code:inviteCode},requestOrigin:'https://other.example.com'})).status,403);
-  const firstJoin=await call(join,{body:{code:inviteCode}});
-  assert.equal(firstJoin.status,200);
-  assert.match(firstJoin.cookie,/HttpOnly; SameSite=Strict; Max-Age=28800; Secure$/);
-  const first=firstJoin.cookie.split(';')[0];
-  const second=(await call(join,{body:{code:inviteCode}})).cookie.split(';')[0];
-  assert.notEqual(first,second);
-  assert.deepEqual((await call(join,{cookie:first})).data,{required:true,joined:true});
+  assert.deepEqual((await call(join)).data,{required:false,joined:false});
+  assert.equal((await call(chat,{body:{question},requestOrigin:'https://other.example.com'})).status,403);
   const circuit=(await call('/api/example')).data.circuit;
   circuit.wires[1].from='A';
-  const wrong=await call(chat,{cookie:first,body:{question,circuit,levelId:'nand',userId:'claimed-id'}});
+  const wrong=await call(chat,{body:{question,circuit,levelId:'nand',userId:'claimed-id'}});
+  assert.match(wrong.cookie,/HttpOnly; SameSite=Strict; Max-Age=28800; Secure$/);
+  const first=wrong.cookie.split(';')[0];
+  assert.deepEqual((await call(join,{cookie:first})).data,{required:false,joined:true});
   assert.equal(wrong.status,200);
   assert.deepEqual(wrong.data.evidence,{kind:'tests',passed:3,total:4,
    failure:{input:{A:1,B:0},expected:{Q:1},actual:{Q:0}}});
@@ -52,10 +45,13 @@ async function main(){
   assert(!Object.hasOwn(mentorCalls[0],'circuit'));
   assert.deepEqual(mentorCalls[0].evidence.failure,wrong.data.evidence.failure);
   assert(mentorCalls[0].evidence.wires.some(w=>w.from==='A'&&w.to==='N'&&w.pin===1));
-  assert.equal((await call(chat,{cookie:second,body:{question,conversationId:wrong.data.conversationId}})).status,403);
-  const other=await call(chat,{cookie:second,body:{question}});
+  const other=await call(chat,{body:{question}});
   assert.equal(other.status,200);
+  const second=other.cookie.split(';')[0];
+  assert.notEqual(first,second);
   assert.notEqual(mentorCalls[1].userId,mentorCalls[0].userId);
+  assert.equal((await call(chat,{cookie:second,body:{question,conversationId:wrong.data.conversationId}})).status,409);
+  assert.equal((await call(chat,{body:{question,conversationId:wrong.data.conversationId}})).status,409);
   circuit.wires[1].from='B';
   const fixed=await call(chat,{cookie:first,body:{question,circuit,levelId:'nand',conversationId:wrong.data.conversationId}});
   assert.deepEqual(fixed.data.evidence,{kind:'tests',passed:4,total:4});
@@ -68,7 +64,7 @@ async function main(){
   mentorUnavailable=false;
   for(let index=0;index<6;index++)assert.equal((await call(chat,{cookie:first,body:{question}})).status,200);
   assert.equal((await call(chat,{cookie:first,body:{question}})).status,429);
-  console.log('PASS classroom invite, two isolated mentor conversations, quotas, and broken/repaired NAND evidence');
+  console.log('PASS public mentor access, isolated conversations, quotas, and broken/repaired NAND evidence');
  }finally{await new Promise(resolve=>server.close(resolve));}
 }
 

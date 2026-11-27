@@ -88,27 +88,22 @@ function createApi({token=process.env.CIRCUITMIND_API_TOKEN||'',mentor=createMen
   const session=classroom?.session(req);
   if(classroom&&req.method==='POST'&&req.headers.origin!==classroom.origin){send(403,{error:'请从班级试玩页面发起请求。'});return true;}
   if(pathname==='/api/classroom'){
-   if(req.method==='GET'){send(200,{required:!!classroom,joined:!!session});return true;}
-   if(!classroom||req.method!=='POST'){send(405,{error:'此入口仅用于加入班级试玩。'});return true;}
-   try{
-    if(session){send(200,{joined:true});return true;}
-    const {code}=await readJson(req,1024);
-    send(200,{joined:true},{'Set-Cookie':classroom.join(typeof code==='string'?code.trim():code)});
-   }catch(err){send(err.status||400,{error:err.message});}
+   if(req.method==='GET'){send(200,{required:false,joined:!!session});return true;}
+   send(405,{error:'请使用 GET'});
    return true;
   }
   if(req.method==='GET'&&pathname==='/api/example'){const n=(id,type,x)=>({id,type,x,y:0,label:id,value:0}),w=(from,to,pin)=>({id:from+to+pin,from,to,pin});send(200,{circuit:{nodes:[n('A','IN',0),n('B','IN',0),n('N','NAND',200),n('Q','OUT',400)],wires:[w('A','N',0),w('B','N',1),w('N','Q',0)]},inputs:{A:1,B:1}});return true;}
   const isMentor=pathname==='/api/mentor/chat';
   const tool=pathname.split('/')[3];if(!isMentor&&(!tools.includes(tool)||pathname!=='/api/tools/'+tool)){send(404,{error:'接口不存在'});return true;}
   if(req.method!=='POST'){send(405,{error:'请使用 POST'});return true;}
-  if(classroom&&!session){send(401,{error:'请输入班级邀请码。'});return true;}
   if(isMentor&&classroom){
-   let finish,evidence,modelEvidence;
+   let access,evidence,modelEvidence;
+   const responseHeaders=()=>access?.cookie?{'Set-Cookie':access.cookie}:{};
    try{
     const request=await readJson(req,512*1024);
     const {question,conversationId,circuit}=request;
     if(typeof question!=='string'||!question.trim()||question.length>8000)throw Error('问题需要为 1–8000 个字符');
-    finish=classroom.begin(session,conversationId);
+    access=classroom.begin(session,conversationId);
     if(circuit!==undefined){
      if(active>=2)evidence=modelEvidence={kind:'unavailable',message:'仿真正在处理其他请求，请稍后重试。'};
      else{
@@ -116,10 +111,10 @@ function createApi({token=process.env.CIRCUITMIND_API_TOKEN||'',mentor=createMen
       try{({evidence,modelEvidence}=await prepareMentorEvidence(request));}finally{active--;}
      }
     }
-    const result=await mentor({userId:session.userId,question,conversationId,evidence:modelEvidence});
-    session.conversations.add(result.conversationId);
-    send(200,{...result,evidence});
-   }catch(err){send(err.status||400,{error:err.message,evidence});}finally{finish?.();}
+    const result=await mentor({userId:access.current.userId,question,conversationId,evidence:modelEvidence});
+    access.current.conversations.add(result.conversationId);
+    send(200,{...result,evidence},responseHeaders());
+   }catch(err){send(err.status||400,{error:err.message,evidence},responseHeaders());}finally{access?.finish();}
    return true;
   }
   if(active>=2){send(503,{error:'工具繁忙，请稍后重试'});return true;}
