@@ -5,7 +5,7 @@ function createMentor({apiKey=process.env.HIAGENT_API_KEY,fetchImpl=globalThis.f
  const base='https://ai-agent.ccnu.edu.cn/api/proxy/api/v1';
  apiKey=apiKey?.trim();
  async function post(endpoint,body){
-  const response=await fetchImpl(base+endpoint,{method:'POST',redirect:'error',headers:{Apikey:apiKey,'Content-Type':'application/json'},body:JSON.stringify({...body,AppKey:apiKey}),signal:AbortSignal.timeout(120000)});
+  const response=await fetchImpl(base+endpoint,{method:'POST',redirect:'error',headers:{Apikey:apiKey,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(120000)});
   if(response.status===403){
    const details=await response.json().catch(()=>null);
    const rejection=details?.ResponseMetadata?.Error;
