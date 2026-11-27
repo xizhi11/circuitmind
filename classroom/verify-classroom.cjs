@@ -49,6 +49,9 @@ async function main(){
   assert.deepEqual(wrong.data.evidence,{kind:'tests',passed:3,total:4,
    failure:{input:{A:1,B:0},expected:{Q:1},actual:{Q:0}}});
   assert.notEqual(mentorCalls[0].userId,'claimed-id');
+  assert(!Object.hasOwn(mentorCalls[0],'circuit'));
+  assert.deepEqual(mentorCalls[0].evidence.failure,wrong.data.evidence.failure);
+  assert(mentorCalls[0].evidence.wires.some(w=>w.from==='A'&&w.to==='N'&&w.pin===1));
   assert.equal((await call(chat,{cookie:second,body:{question,conversationId:wrong.data.conversationId}})).status,403);
   const other=await call(chat,{cookie:second,body:{question}});
   assert.equal(other.status,200);
@@ -57,6 +60,7 @@ async function main(){
   const fixed=await call(chat,{cookie:first,body:{question,circuit,levelId:'nand',conversationId:wrong.data.conversationId}});
   assert.deepEqual(fixed.data.evidence,{kind:'tests',passed:4,total:4});
   assert.equal(fixed.data.conversationId,wrong.data.conversationId);
+  assert.deepEqual(mentorCalls[2].evidence,{kind:'tests',passed:4,total:4,failure:undefined});
   mentorUnavailable=true;
   const unavailable=await call(chat,{cookie:second,body:{question,circuit,levelId:'nand'}});
   assert.equal(unavailable.status,502);

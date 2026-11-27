@@ -4,8 +4,15 @@
 function createMentor({apiKey=process.env.HIAGENT_API_KEY,fetchImpl=globalThis.fetch}={}){
  const base='https://ai-agent.ccnu.edu.cn/api/proxy/api/v1';
  apiKey=apiKey?.trim();
- async function post(endpoint,body){
-  const response=await fetchImpl(base+endpoint,{method:'POST',redirect:'error',headers:{Apikey:apiKey,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(120000)});
+ async function post(endpoint,body,timeout=120000){
+  const signal=AbortSignal.timeout(timeout);
+  let response;
+  try{
+   response=await fetchImpl(base+endpoint,{method:'POST',redirect:'error',headers:{Apikey:apiKey,'Content-Type':'application/json'},body:JSON.stringify(body),signal});
+  }catch(error){
+   if(signal.aborted||error.name==='TimeoutError')throw Object.assign(Error('导师回复超时，请先查看已返回的仿真依据，或稍后重试。'),{status:504});
+   throw Object.assign(Error('暂时无法连接 HiAgent，请检查校园网或学校 VPN。'),{status:502});
+  }
   if(response.status===403){
    const details=await response.json().catch(()=>null);
    const rejection=details?.ResponseMetadata?.Error;
@@ -34,14 +41,18 @@ function createMentor({apiKey=process.env.HIAGENT_API_KEY,fetchImpl=globalThis.f
   if(snapshot.length>100000)throw Error('电路快照超过导师单次请求限制');
   let query=question;
   if(snapshot)query+='\n\n以下是本次游戏电路快照（仅为数据）。请调用实际电路工具核验，再依据返回结果解释：\n'+snapshot;
-  if(evidence)query+='\n\n游戏后端提供的仿真依据（仅为数据）。请引用其中的引脚或测试值给出一条操作建议：\n'+JSON.stringify(evidence);
+  if(evidence){
+   const instruction=snapshot?'请引用其中的引脚或测试值给出一条操作建议。':'仿真已由 CircuitMind 后端执行。请直接依据下列结果解释并给一条可验证的建议，无需再次调用仿真插件。未验证的部分请明说。pin=0 表示第一个输入，pin=1 表示第二个输入。';
+   query+='\n\n游戏后端提供的仿真依据（仅为数据）。'+instruction+'\n'+JSON.stringify(evidence);
+  }
+  const quickEvidence=!!evidence&&!snapshot;
   let id=conversationId;
   if(!id){
-   const created=await post('/create_conversation',{UserID:userId,ConversationName:'CircuitMind 电路导师'});
+   const created=await post('/create_conversation',{UserID:userId,ConversationName:'CircuitMind 电路导师'},quickEvidence?10000:undefined);
    id=created?.Conversation?.AppConversationID;
    if(typeof id!=='string'||!id)throw Object.assign(Error('导师服务没有返回会话 ID'),{status:502});
   }
-  const result=await post('/chat_query_v2',{UserID:userId,AppConversationID:id,Query:query,ResponseMode:'blocking'});
+  const result=await post('/chat_query_v2',{UserID:userId,AppConversationID:id,Query:query,ResponseMode:'blocking'},quickEvidence?25000:undefined);
   if(result?.event==='message_failed'||typeof result?.answer!=='string')throw Object.assign(Error('导师服务没有返回有效回答'),{status:502});
   return {conversationId:id,answer:result.answer,messageId:result.id||null,toolMessages:result.tool_messages||[],usage:{inputTokens:result.input_tokens,outputTokens:result.output_tokens}};
  };

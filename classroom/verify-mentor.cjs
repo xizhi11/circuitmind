@@ -23,8 +23,13 @@ const {createMentor}=require('./mentor.cjs');
  assert.equal(calls[1].body.AppConversationID,'conversation_1');
  assert.ok(calls[1].body.Query.includes('"nodes":[]'));
  assert.ok(!JSON.stringify(first).includes('test-only-key'));
- await chat({userId:'student_1',conversationId:first.conversationId,question:'为什么？'});
- assert.equal(calls.length,3); // Continuing a conversation must not create another one.
+ await chat({userId:'student_1',conversationId:first.conversationId,question:'为什么？',evidence:{kind:'tests',passed:3,total:4}});
+ assert.equal(calls.length,3);
+ assert.match(calls[2].body.Query,/无需再次调用仿真插件/);
+ assert.match(calls[2].body.Query,/"passed":3/);
+ assert.ok(!calls[2].body.Query.includes('游戏电路快照'));
+ const timedOut=createMentor({apiKey:'test-only-key',fetchImpl:async()=>{throw new DOMException('Timeout','TimeoutError');}});
+ await assert.rejects(timedOut({userId:'x',question:'test'}),e=>e.status===504&&e.message.includes('导师回复超时')); // Continuing a conversation must not create another one.
  await assert.rejects(chat({userId:'x'.repeat(21),question:'test'}),/userId/);
  await assert.rejects(chat({userId:'x',question:'test',circuit:{}}),/nodes/);
  assert.equal(calls.length,3);

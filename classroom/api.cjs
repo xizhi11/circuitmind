@@ -64,6 +64,19 @@ async function mentorEvidence({circuit,levelId}){
  }
 }
 
+async function prepareMentorEvidence({circuit,levelId}){
+ if(circuit===undefined)return {};
+ if(!Array.isArray(circuit?.nodes)||!Array.isArray(circuit?.wires))
+  throw requestError(400,'电路需要包含 nodes 和 wires 数组');
+ const evidence=await mentorEvidence({circuit,levelId});
+ if(evidence.kind==='tests'&&evidence.failure&&circuit.nodes.length<=12&&circuit.wires.length<=24){
+  const nodes=circuit.nodes.map(({id,type})=>({id,type}));
+  const wires=circuit.wires.map(({from,to,pin,output})=>({from,to,pin,output}));
+  return {evidence,modelEvidence:{...evidence,nodes,wires}};
+ }
+ return {evidence,modelEvidence:evidence};
+}
+
 function createApi({token=process.env.CIRCUITMIND_API_TOKEN||'',mentor=createMentor(),classroom=null}={}){
  let active=0;
  return async function api(req,res,pathname){
@@ -90,19 +103,20 @@ function createApi({token=process.env.CIRCUITMIND_API_TOKEN||'',mentor=createMen
   if(req.method!=='POST'){send(405,{error:'请使用 POST'});return true;}
   if(classroom&&!session){send(401,{error:'请输入班级邀请码。'});return true;}
   if(isMentor&&classroom){
-   let finish,evidence;
+   let finish,evidence,modelEvidence;
    try{
     const request=await readJson(req,512*1024);
-    if(typeof request.question!=='string'||!request.question.trim()||request.question.length>8000)throw Error('问题需要为 1–8000 个字符');
-    finish=classroom.begin(session,request.conversationId);
-    if(request.circuit){
-     if(active>=2)evidence={kind:'unavailable',message:'仿真正在处理其他请求，请稍后重试。'};
+    const {question,conversationId,circuit}=request;
+    if(typeof question!=='string'||!question.trim()||question.length>8000)throw Error('问题需要为 1–8000 个字符');
+    finish=classroom.begin(session,conversationId);
+    if(circuit!==undefined){
+     if(active>=2)evidence=modelEvidence={kind:'unavailable',message:'仿真正在处理其他请求，请稍后重试。'};
      else{
       active++;
-      try{evidence=await mentorEvidence(request);}finally{active--;}
+      try{({evidence,modelEvidence}=await prepareMentorEvidence(request));}finally{active--;}
      }
     }
-    const result=await mentor({...request,userId:session.userId,evidence});
+    const result=await mentor({userId:session.userId,question,conversationId,evidence:modelEvidence});
     session.conversations.add(result.conversationId);
     send(200,{...result,evidence});
    }catch(err){send(err.status||400,{error:err.message,evidence});}finally{finish?.();}
@@ -110,11 +124,19 @@ function createApi({token=process.env.CIRCUITMIND_API_TOKEN||'',mentor=createMen
   }
   if(active>=2){send(503,{error:'工具繁忙，请稍后重试'});return true;}
   active++;
+  let evidence;
   try{
    const request=await readJson(req,4*1024*1024);
-   if(isMentor){send(200,await mentor(request));return true;}
+   if(isMentor){
+    const {userId,question,conversationId}=request;
+    const prepared=await prepareMentorEvidence(request);
+    evidence=prepared.evidence;
+    const result=await mentor({userId,question,conversationId,evidence:prepared.modelEvidence});
+    send(200,{...result,evidence});
+    return true;
+   }
    send(200,await runTool(tool,request));
-  }catch(e){send(e.status||400,{error:e.message});}finally{active--;}
+  }catch(e){send(e.status||400,{error:e.message,evidence});}finally{active--;}
   return true;
  };
 }
