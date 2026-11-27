@@ -287,12 +287,25 @@ async function run(){
   await play('从汇编画出旋转立方体');
   await js("document.querySelector('#studio-step').click()");
   assert(await js("ticks===1 && studioBusy() && !timer"));
-  await js("document.querySelector('#studio-run').click()");
-  for(let i=0;i<160&&!await js("state.ram[kit.model]>0");i++)await sleep(50);
-  assert(await js("state.ram[kit.model]>0"));
-  await js("document.querySelector('#studio-run').click()");
+  assert(await js("!document.querySelector('#studio-next-frame').disabled"));
+  await js("document.querySelector('#studio-next-frame').click()");await waitStudio();
+  assert.equal(await js("state.ram[kit.model]"),1);
+  await js(`new Promise(resolve=>{
+   document.querySelector('#studio-run').click();
+   const pause=setInterval(()=>{
+    if(!studioBusy())return;
+    clearInterval(pause);document.querySelector('#studio-run').click();resolve();
+   },4);
+  })`);
+  assert(await js("studioBusy() && !timer && !document.querySelector('#studio-next-frame').disabled"));
+  assert.match(await js("document.querySelector('#studio-status').textContent"),/当前帧尚未画完/);
+  await js("document.querySelector('#studio-next-frame').click()");await waitStudio();
+  assert.equal(await js("state.ram[kit.model]"),2);
+  await js("document.querySelector('#studio-next-frame').click()");await waitStudio();
+  assert.equal(await js("state.ram[kit.model]"),3);
   await play('像素节奏机');
-  await js("document.querySelector('#studio-pattern button').click()");await waitStudio();
+  await js("document.querySelector('#studio-pattern button').click();document.querySelector('#studio-run').click()");
+  assert(await js("studioBusy() && !timer && !document.querySelector('#studio-next-frame').disabled"));
   await js("document.querySelector('#studio-next-frame').click()");await waitStudio();
   assert(await js("state.ram[kit.model+65]===1 && document.querySelector('#studio-pattern button').classList.contains('playhead')"));
   await play('微型操作系统终端');

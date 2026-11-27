@@ -1723,12 +1723,15 @@ function queueStudio(value){
 function queueStudioFrame(){
  return queueStudio(level.demo==='lander'?16|(studio.mask|studio.keys):level.demo==='rhythm'?65:1);
 }
-function startStudio(auto=false){
+function startStudio(mode='command'){
  if(timer)return;
  const missing=studioNeeds();
  if(missing){studio.status=missing;renderStudio();return;}
- studio.auto=auto;
- if(studioBusy())studio.budget=ticks+24000;
+ studio.auto=mode==='play';
+ const pendingCommand=state.ram[kit.command]||0;
+ let advanceAfterEdit=mode==='frame'&&level.demo==='rhythm'&&pendingCommand>0&&pendingCommand<65;
+ if(studioBusy()){studio.budget=ticks+24000;studio.status='';}
+ else if(mode==='frame'&&!queueStudioFrame())return;
  timer=setInterval(()=>{
   const now=performance.now();
   if(studio.auto&&!studioBusy()&&now>=studio.nextAt&&!studioResult()){
@@ -1741,6 +1744,10 @@ function startStudio(auto=false){
    if(ticks===previous||ticks>=studio.budget&&studioBusy()){
     studio.status='CPU 尚未清除命令。可切换到电路与汇编检查。';stop();break;
    }
+  }
+  if(timer&&!studioBusy()&&advanceAfterEdit){
+   advanceAfterEdit=false;
+   queueStudioFrame();
   }
   if(studioResult()||(!studioBusy()&&!studio.auto))stop();
   draw();
@@ -1853,7 +1860,7 @@ function renderStudio(){
  const run=$('studio-run'),next=$('studio-next-frame'),single=$('studio-step');
  run.disabled=!!studioResult()||!studioAutomatic()&&!studioBusy();
  run.textContent=timer?'暂停':studioAutomatic()?'播放':'继续处理';
- next.disabled=!!timer||studioBusy()||!!studioResult();single.disabled=!!timer||!!studioResult();
+ next.disabled=!!timer||!!studioResult();single.disabled=!!timer||!!studioResult();
  const status=$('studio-status'),registers=$('studio-registers');
  let detail='CPU 周期 '+ticks,message=studio.status||(studioBusy()?'CPU 正在处理输入。':'');
  if(level.demo==='lander'||level.demo==='cube')paintStudioFrame($('studio-screen'),memory,level.demo==='lander');
@@ -1864,6 +1871,7 @@ function renderStudio(){
   message=message||(studioResult()===1?'着陆成功！':studioResult()===2?'着陆失败，按复位重试。':'方向键 ← ↑ → 控制横移与推力。');
  }else if(level.demo==='cube'){
   detail+=' · 下一角度 '+(memory[model]||0)+' / 16';
+  if(!studio.status&&studioBusy())message=timer?'CPU 正在绘制当前帧。':'当前帧尚未画完，点「推进一帧」继续。';
  }else if(level.demo==='rhythm'){
   const column=memory[model+64];
   Array.from($('studio-pattern').children).forEach((cell,i)=>{
@@ -1892,9 +1900,9 @@ function renderStudio(){
 $('studio-run').onclick=()=>{
  if(timer){stop();draw();return;}
  if(level.demo==='rhythm')tryStudioAudio();
- startStudio(studioAutomatic());
+ startStudio(studioAutomatic()?'play':'command');
 };
-$('studio-next-frame').onclick=()=>{if(level.demo==='rhythm')tryStudioAudio();if(queueStudioFrame())startStudio();};
+$('studio-next-frame').onclick=()=>{if(level.demo==='rhythm')tryStudioAudio();startStudio('frame');};
 $('studio-step').onclick=()=>{
  if(!studioBusy()&&studioAutomatic()&&!queueStudioFrame())return;
  if(level.demo==='rhythm')tryStudioAudio();
