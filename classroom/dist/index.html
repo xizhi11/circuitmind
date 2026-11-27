@@ -5,7 +5,7 @@
 <header class="topbar">
   <div class="actions header-tools">
     <div class="brand"><span aria-hidden="true">◈</span><strong>CircuitMind</strong></div>
-    <button id="home">☰ 关卡</button><button id="workshop">创意工坊</button><button id="backup" title="备份全部进度">保存</button>
+    <button id="home">☰ 关卡</button><button id="workshop">创意工坊</button><button id="tutorial-open" type="button">使用教程</button><button id="backup" title="备份全部进度">保存</button>
     <button id="undo" title="Ctrl+Z">撤销</button><button id="redo" title="Ctrl+Y">重做</button>
     <button id="zoom-out" aria-label="缩小画布">−</button><button id="zoom-in" aria-label="放大画布">＋</button>
   </div>
@@ -50,7 +50,7 @@
   <main class="workbench">
     <section class="mission">
       <div><span id="tag" class="eyebrow"></span><p id="description"></p><p id="completion-status" role="status"></p></div>
-      <div class="actions mission-actions"><button id="test" class="primary">运行测试</button><button id="next-level" hidden>下一关</button><button id="workshop-view" hidden>编辑电路与汇编</button><button id="workshop-guide" hidden>技术说明与搭建</button></div>
+      <div class="actions mission-actions"><button id="sandbox-guide" class="primary" type="button" hidden>新手搭建</button><button id="test" class="primary">运行测试</button><button id="next-level" hidden>下一关</button><button id="workshop-view" hidden>编辑电路与汇编</button><button id="workshop-guide" hidden>技术说明与搭建</button></div>
     </section>
     <section id="workshop-play" aria-label="工坊试玩" hidden>
       <section id="light-panel" aria-labelledby="light-title" hidden>
@@ -215,6 +215,30 @@
 <dialog id="workshop-dialog" aria-labelledby="workshop-title">
   <div class="dialog-heading"><h2 id="workshop-title">创意工坊</h2><button id="close-workshop" type="button">关闭</button></div>
   <div id="workshop-works"></div>
+</dialog>
+<dialog id="tutorial-dialog" aria-labelledby="tutorial-title">
+  <div class="dialog-heading"><h2 id="tutorial-title">使用教程</h2><button id="tutorial-close" type="button">关闭</button></div>
+  <nav id="tutorial-topics" class="actions" aria-label="教程主题">
+    <button type="button" data-tutorial="wiring" aria-pressed="false">接线与测试</button>
+    <button type="button" data-tutorial="sandbox" aria-pressed="false">自由实验室</button>
+    <button type="button" data-tutorial="light" aria-pressed="false">光路调试</button>
+    <button type="button" data-tutorial="levels" aria-pressed="false">关卡地图</button>
+    <button type="button" data-tutorial="workshop" aria-pressed="false">创意工坊</button>
+  </nav>
+  <section id="tutorial-sandbox" hidden aria-labelledby="tutorial-sandbox-title">
+    <h3 id="tutorial-sandbox-title">用一个 NAND 搭出反相器</h3>
+    <ol>
+      <li>新建的自由实验室已有输入 A 和输出 Q。在右侧「布尔」中添加一个 NAND。</li>
+      <li>先点 A 元件右侧的输出引脚，再点 NAND 左侧的一个输入引脚。重复一次，把 A 也接到 NAND 的另一个输入。</li>
+      <li>把 NAND 的输出引脚接到 Q 元件左侧的输入引脚。点仿真监控中 A 的灯，确认 A 为 0 时 Q 为 1，A 为 1 时 Q 为 0。</li>
+    </ol>
+    <p>自由实验室靠输入与输出读数验证电路功能。搭时序电路时，可点「单步」观察寄存器在下一拍怎样变化。</p>
+    <button id="tutorial-wiring" type="button">看接线示意图</button>
+  </section>
+  <figure id="tutorial-figure" hidden>
+    <figcaption><span id="tutorial-caption"></span><a id="tutorial-original" target="_blank" rel="noopener">查看高清原图（新标签页）</a></figcaption>
+    <img id="tutorial-image" alt="">
+  </figure>
 </dialog>
 <dialog id="workshop-guide-dialog" aria-labelledby="workshop-guide-title">
   <div class="dialog-heading"><h2 id="workshop-guide-title"></h2><button id="close-workshop-guide" type="button">关闭</button></div>

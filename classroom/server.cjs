@@ -17,7 +17,7 @@ if(!loopback&&classroom&&!classroom.origin.startsWith('https://'))throw Error('�
 if(classroom&&!process.env.HIAGENT_API_KEY?.trim())throw Error('班级试玩需要配置 HIAGENT_API_KEY');
 const api=createApi({mentor:localRenderMentor(),classroom,...(classroom?{token:''}:{})});
 const root = path.join(__dirname, 'dist');
-const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png' };
 function localRenderMentor(){
   if(!loopback||process.env.HIAGENT_API_KEY)return undefined;
   const config=path.join(__dirname,'.env.backend');

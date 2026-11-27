@@ -335,6 +335,17 @@ dialog { color: #e6edf6; background: #1b293a; border: 1px solid #57718d; border-
 dialog::backdrop { background: #0a111bbf; }
 dialog p { color: var(--muted); }
 .dialog-heading { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 10px; }
+#tutorial-dialog { width: min(1000px,94vw); }
+#tutorial-topics { margin-bottom: 12px; }
+#tutorial-topics button[aria-pressed="true"] { background: #2d493e; border-color: #7bab8b; color: #c7f6d1; }
+#tutorial-figure { margin: 0; }
+#tutorial-figure figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; margin-bottom: 9px; color: var(--muted); }
+#tutorial-original { color: var(--mint); }
+#tutorial-image { display: block; width: 100%; height: auto; border-radius: 4px; }
+#tutorial-sandbox { max-width: 44rem; }
+#tutorial-sandbox ol { margin: 10px 0; padding-inline-start: 24px; }
+#tutorial-sandbox li + li { margin-top: 8px; }
+#tutorial-wiring { margin-top: 12px; }
 #completion-dialog { width: min(420px, 94vw); border-color: #668c78; }
 .completion-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .completion-heading h2 { font-size: 1.22rem; overflow-wrap: anywhere; }

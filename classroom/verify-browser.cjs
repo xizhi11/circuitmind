@@ -39,6 +39,14 @@ async function run(){
   await send('Page.navigate',{url:pathToFileURL(path.join(__dirname,'dist/index.html')).href});
   for(let i=0;i<100&&!await js("Boolean(document.querySelector('#levels button'))");i++)await sleep(100);
   assert(await js("document.querySelector('#guided').checked"));
+  await js("document.querySelector('#tutorial-open').click()");
+  assert(await js("document.querySelector('#tutorial-dialog').open"));
+  for(const [topic,file] of [['wiring','wiring'],['light','light'],['levels','levels'],['workshop','workshop']]){
+   await js(`document.querySelector('[data-tutorial="${topic}"]').click()`);
+   assert(await js(`document.querySelector('#tutorial-original').href.endsWith('/guides/${file}.png')`));
+   assert(await js("document.querySelector('#tutorial-image').decode().then(()=>document.querySelector('#tutorial-image').naturalWidth>2000,()=>false)"));
+  }
+  await js("document.querySelector('#tutorial-close').click()");
   assert(await js("document.querySelectorAll('#levels button:disabled').length > 10"));
   assert(await js("document.querySelector('#delete-selection').disabled"));
   assert.match(await js("document.querySelector('#monitor-outputs').textContent"),/未连接/);
@@ -111,7 +119,11 @@ async function run(){
   assert.match(await js("document.querySelector('#title').textContent"),/翻转/);
   await js("document.querySelector('#guided').click()");
   assert(await js("document.querySelectorAll('#levels button').length >= 76"));
-  await js("openLevel('sandbox');doc={nodes:[Game.node('source','IN32',100,100),Game.node('sink','OUT32',500,100)],wires:[Game.wire('source','sink',0)]};edit()");
+  await js("openLevel('sandbox');document.querySelector('#sandbox-guide').click()");
+  assert(await js("document.querySelector('#tutorial-dialog').open && !document.querySelector('#tutorial-sandbox').hidden && document.querySelector('#tutorial-sandbox ol').children.length===3"));
+  await js("document.querySelector('#tutorial-wiring').click()");
+  assert(await js("document.querySelector('#tutorial-sandbox').hidden && !document.querySelector('#tutorial-figure').hidden"));
+  await js("document.querySelector('#tutorial-close').click();doc={nodes:[Game.node('source','IN32',100,100),Game.node('sink','OUT32',500,100)],wires:[Game.wire('source','sink',0)]};edit()");
   await js("document.querySelector('#monitor-inputs .signal-toggle').click()");
   assert.equal(await js("document.querySelector('#monitor-outputs b').textContent"),'0x80000000');
   await js("document.querySelector('#monitor-inputs .signal-toggle').click()");
@@ -337,6 +349,9 @@ async function run(){
   await sleep(100);
   assert(await js("document.documentElement.scrollWidth<=window.innerWidth"));
   assert(await js("document.querySelector('#workshop-guide-dialog').getBoundingClientRect().right<=window.innerWidth"));
+  await js("document.querySelector('#close-workshop-guide').click();document.querySelector('#tutorial-open').click()");
+  assert(await js("document.querySelector('#tutorial-dialog').open && document.querySelector('#tutorial-dialog').getBoundingClientRect().right<=window.innerWidth && document.querySelector('[data-tutorial=light]').getAttribute('aria-pressed')==='true'"));
+  await js("document.querySelector('#tutorial-close').click()");
   assert.deepEqual(errors,[]);console.log('PASS Edge: guided circuit tools, all eight workshops, guides, downloads, and separate build boards');
   await send('Browser.close').catch(()=>{});
  }finally{

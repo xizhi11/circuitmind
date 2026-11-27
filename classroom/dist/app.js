@@ -176,6 +176,7 @@ function openLevel(id,fresh=false,keepContext=false,editor=false){
  compileCurrent();camera={x:0,y:0,scale:1};
  const goal=guided&&level.courseGoal||level.text;
  $('tag').textContent=level.tag;$('title').textContent=guided&&level.id==='full'?level.courseName:level.title;$('description').textContent=goal;
+ $('sandbox-guide').hidden=level.id!=='sandbox'||inspectionStack.length>0;
  $('drill-panel').hidden=!level.drill;
  if(level.drill)document.body.classList.add('drill-mode');else document.body.classList.remove('drill-mode');
  if(level.drill){$('drill-question').textContent=doc.bestTime?'最佳 '+(doc.bestTime/1000).toFixed(2)+' 秒':'';$('drill-answer').hidden=true;$('drill-submit').hidden=true;}
@@ -1659,6 +1660,43 @@ function showWorld(){
  $('world').showModal();
 }
 $('home').onclick=showWorld;$('close-world').onclick=()=>$('world').close();
+const tutorialFigures={
+ wiring:['wiring.png','基础接线与测试标注图','图中用两个 NAND 搭出与门。「最初的 NAND」关卡只需要一个。'],
+ light:['light.png','光路解谜板调试标注图','在电路视图中逐拍观察坐标和方向。点击「返回试玩」可操作棋盘。'],
+ levels:['levels.png','关卡选择与学习路径标注图','从顶栏「关卡」打开地图，按前置关卡推进。'],
+ workshop:['workshop.png','创意工坊试玩和从零搭建标注图','从顶栏「创意工坊」打开作品列表，再选试玩或搭建。']
+};
+function showTutorialTopic(topic){
+ for(const control of $('tutorial-topics').children)
+  control.setAttribute('aria-pressed',String(control.dataset.tutorial===topic));
+ const guide=tutorialFigures[topic];
+ $('tutorial-sandbox').hidden=!!guide;
+ $('tutorial-figure').hidden=!guide;
+ if(guide){
+  const [file,alt,caption]=guide;
+  const src='guides/'+file;
+  $('tutorial-image').alt=alt;
+  $('tutorial-image').src=src;
+  $('tutorial-original').href=src;
+  $('tutorial-caption').textContent=caption;
+ }
+ $('tutorial-dialog').scrollTop=0;
+}
+function openTutorial(topic){
+ showTutorialTopic(topic);
+ $('tutorial-dialog').showModal();
+}
+for(const control of $('tutorial-topics').children)
+ control.onclick=()=>showTutorialTopic(control.dataset.tutorial);
+$('tutorial-open').onclick=()=>openTutorial(
+ level.workshop==='light'?'light':level.workshop?'workshop':level.id==='sandbox'?'sandbox':'wiring'
+);
+$('sandbox-guide').onclick=()=>openTutorial('sandbox');
+$('tutorial-wiring').onclick=()=>{
+ showTutorialTopic('wiring');
+ $('tutorial-topics').querySelector('[data-tutorial="wiring"]').focus();
+};
+$('tutorial-close').onclick=()=>$('tutorial-dialog').close();
 const {originals:workshopWorks,guides:workshopGuides,markdown:workshopMarkdown,wiring:workshopWiring,buildIntro:workshopIntro}=Game.workshopGuides;
 const kit=Game.workshopKit;
 function studioNeeds(){
