@@ -35,7 +35,7 @@ const alu=task('alu-build','两功能 ALU','05 计算机',[['A',8],['B',8],['OP'
 const cpuReference=Game.levels.find(l=>l.id==='cpu');
 extra.push({id:'cpu-build',title:'连接你的计算机',chapter:'05 计算机',tag:'CPU · 综合挑战',text:'参考 CPU 的全部元件已放置，连线由你完成。使用 CM8 指令格式，验证终端在前 16 拍依次输出 A、B、C、D、E。每个元件的引脚可在探针中查看。',allowed:['REG8','ROM16','CONTROL','ALU8','RAM8','MUX8','ADD8','CONST','OUT8'],program:cpuReference.program,
  build:()=>{const d=cpuReference.build();d.wires=[];return d;},
- verify:net=>{let state=net.initial(),output=[];for(let i=0;i<16;i++){const r=net.tick(state);state=r.state;for(const w of r.writes)if(w.address===255)output.push(w.value);}return [{input:{cycles:16},expected:[65,66,67,68,69],actual:output,pass:JSON.stringify(output)===JSON.stringify([65,66,67,68,69])}];}});
+ verify:net=>{let state=net.initial(),output=[];for(let i=0;i<16;i++){const r=net.tick(state);state=r.state;for(const w of r.writes)if(w.address===255)output.push(w.value);}return [{input:{cycles:16},expected:[65,66,67,68,69],actual:output,replay:{steps:16},pass:JSON.stringify(output)===JSON.stringify([65,66,67,68,69])}];}});
 const chapters={nand:'01 逻辑门',not:'01 逻辑门',and:'01 逻辑门',xor:'01 逻辑门',half:'02 数据通路',full:'02 数据通路',register:'04 记忆与时钟',counter:'04 记忆与时钟',cpu:'05 计算机',mines:'06 程序与应用',sandbox:'自由实验室'};
 for(const l of Game.levels)l.chapter=chapters[l.id];
 Game.levels.push(...extra);

@@ -64,7 +64,7 @@ function construction(id,title,machine,source,targets,text,expected){
     if(v.inputs('strobe')[0])actual.push(v.inputs('output')[0]);
     state=net.tick(state).state;
    }
-   return [{input:{周期:70},expected,actual,pass:actual.join(',')===expected.join(',')}];
+   return [{input:{周期:70},expected,actual,replay:{steps:70},pass:actual.join(',')===expected.join(',')}];
   }};
 }
 const sample=Game.levels.find(l=>l.id==='overture').program;
@@ -84,14 +84,15 @@ function program(id,title,text,examples){
  const build=()=>Game.symphony.machine(starter);
  const goal={...template,id,title,text,chapter:'09 程序作品',build,program:starter};
  goal.verify=net=>examples.map(([input,expected])=>{
-  let state=net.initial();const actual=[];
-  for(let i=0;i<500;i++){
+  let state=net.initial(),steps=0;const actual=[];
+  while(steps<500){
+   steps++;
    const r=net.evaluate(state,{input});if(r.inputs('strobe')[0])actual.push(r.inputs('output')[0]);
    const next=net.tick(state,{input}).state;
    if(next.pc===state.pc&&!r.inputs('strobe')[0])break;
    state=next;
   }
-  return {input:{IN:input},actual,expected,pass:actual.join(',')===expected.join(',')};
+  return {input:{IN:input},actual,expected,replay:{inputs:{input},steps},pass:actual.join(',')===expected.join(',')};
  });
  return goal;
 }
@@ -136,12 +137,14 @@ function cm8Program(id,title,text,examples){
    let state=net.initial();const actual=[];
    if(!Array.isArray(state.ram))throw Error('请保留地址为 0～255 的 RAM');
    state.ram[0]=input;
-   for(let ticks=0;ticks<128;ticks++){
+   let steps=0;
+   while(steps<128){
+    steps++;
     const step=net.tick(state);state=step.state;
     for(const write of step.writes)if(write.id==='ram'&&write.address===255)actual.push(write.value);
     if(step.values.ctrl?.[6]===0)break;
    }
-   return {input:{'RAM[0]':input},expected,actual,pass:actual.length===expected.length&&actual.every((v,i)=>v===expected[i])};
+   return {input:{'RAM[0]':input},expected,actual,replay:{ram0:input,steps},pass:actual.length===expected.length&&actual.every((v,i)=>v===expected[i])};
   });
  }};
 }
@@ -212,7 +215,7 @@ byId.get('register').courseBuild=logic('register','一位寄存器',3,{D:1,EN:1}
 byId.get('cpu-build').courseSubstitutions={REG8:'register8',ALU8:'alu-cpu',CONTROL:'control-build',MUX8:'mux8',ADD8:'adder8'};
 for(const id of ['sr-latch','dff-build','register8','register','pc-build'])byId.get(id).checkBeforeClock=true;
 byId.get('pc-build').verify=net=>{
- let state=net.initial();
+ let state=net.initial(),start=0;
  const run=(cycles,input)=>{
   const before=net.evaluate(state,input).inputs('Q')[0];
   let result;
@@ -220,8 +223,10 @@ byId.get('pc-build').verify=net=>{
   return [before,result.inputs('Q')[0]];
  };
  return [[2,1,[0,2]],[1,0,[2,2]],[254,1,[2,0]],[1,1,[0,1]]].map(([cycles,en,expected])=>{
-  const actual=run(cycles,{EN:en});
-  return {input:{EN:en,周期:cycles},expected,actual,pass:actual.every((v,i)=>v===expected[i])};
+  const replay={inputs:{EN:en},start,steps:cycles,state};
+  const actual=run(cycles,replay.inputs);
+  start+=cycles;
+  return {input:{EN:en,周期:cycles},expected,actual,replay,pass:actual.every((v,i)=>v===expected[i])};
  });
 };
 Game.guidedPath=guided.map(([id])=>byId.get(id));

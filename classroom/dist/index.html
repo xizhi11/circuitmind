@@ -132,6 +132,17 @@
         <div class="actions"><button id="back-circuit" hidden>返回上层</button><button id="fit">适应画布</button><button id="focus-editor">专注搭建</button><button id="delete-selection" type="button" class="delete-action" title="选中元件或导线后删除（Delete）" disabled>删除所选</button></div>
         <div class="actions"><button id="ask-mentor">问导师</button><button id="tool-check">后端检查</button></div>
       </div>
+      <div id="replay-bar" class="replay-bar" hidden>
+        <p id="replay-summary" role="status"></p>
+        <div class="actions">
+          <button id="replay-prev" type="button">上一用例</button>
+          <button id="replay-next" type="button">下一用例</button>
+          <button id="replay-start" type="button">回到起点</button>
+          <button id="replay-detail" type="button">看波形</button>
+          <button id="replay-close" type="button">退出回放</button>
+        </div>
+      </div>
+      <p id="step-summary" class="step-summary"></p>
       <div class="canvas-wrap">
         <svg id="board" viewBox="0 0 1280 760" aria-label="可拖拽电路画布">
           <defs><pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 H 0 V 24" fill="none" stroke="#b4c5dc" stroke-opacity=".14"/></pattern></defs>

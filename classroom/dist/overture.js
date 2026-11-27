@@ -169,7 +169,7 @@ function mission(id,title,text,examples,starter='; 在这里写程序\nNOP') {
     if(before.inputs('strobe')[0]) actual.push(before.inputs('output')[0]);
     state=net.tick(state,{input}).state;
    }
-   return {input:{IN:input,周期:80},expected,actual,pass:actual.length===expected.length&&actual.every((v,i)=>v===expected[i])};
+   return {input:{IN:input,周期:80},expected,actual,replay:{inputs:{input},steps:80},pass:actual.length===expected.length&&actual.every((v,i)=>v===expected[i])};
   })};
 }
 const byteMachine={id:'overture',title:'六寄存器计算机',chapter,tag:'可拆线的 Overture 数据通路',machine:'overture',text:guide,program:example,build:()=>machine(example)};

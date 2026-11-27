@@ -48,7 +48,7 @@ function execute(tool,request){
   const level=Game.levels.find(l=>l.id===request.levelId);
   let cases=request.cases,clocked=request.clocked===true;
   if(request.levelId&&!level)throw Error('关卡不存在');
-  if(level?.verify){const results=level.verify(net,circuit);return {valid:true,passed:results.filter(r=>r.pass).length,total:results.length,cases:results};}
+  if(level?.verify){const results=level.verify(net,circuit).map(({replay,...result})=>result);return {valid:true,passed:results.filter(r=>r.pass).length,total:results.length,cases:results};}
   if(level){
    if(level.vectors){cases=level.vectors;clocked=!!level.clocked;}
    else if(level.sequence){clocked=true;cases=level.sequence.map(input=>({input:Object.fromEntries(level.inputs.map(id=>[id,input[id]])),expected:{[level.outputs[0]]:input.Q}}));}

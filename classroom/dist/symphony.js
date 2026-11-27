@@ -141,7 +141,7 @@ function lesson(id,title,text,source,examples){
    if(before.inputs('strobe')[0])actual.push(before.inputs('output')[0]);
    state=net.tick(state,{input}).state;
   }
-  return {input:{IN:input,周期:112},actual,expected,pass:actual.length===expected.length&&expected.every((v,i)=>actual[i]===v)};
+  return {input:{IN:input,周期:112},actual,expected,replay:{inputs:{input},steps:112},pass:actual.length===expected.length&&expected.every((v,i)=>actual[i]===v)};
  });
  return entry;
 }

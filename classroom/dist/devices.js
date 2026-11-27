@@ -73,7 +73,7 @@ function exercise(id,title,text,create,count,cycles,machine){
     if(r.inputs('strobe')[0])device.write(r.inputs('output')[0]);
     state=net.tick(state,inputs).state;used++;if(used%128===0)yield;
    }
-   rows.push({input:{情景:i+1,已用周期:used},expected:[1],actual:[Number(device.pass)],pass:device.pass});
+   rows.push({input:{情景:i+1,已用周期:used},expected:[1],actual:[Number(device.pass)],replay:{scenario:i,steps:used},pass:device.pass});
   }
   return rows;
  }
@@ -122,7 +122,7 @@ function budget(machine,examples,limit){
      const r=trial.evaluate(state);if(r.inputs('strobe')[0])actual.push(r.inputs('output')[0]);
      state=trial.tick(state).state;
     }
-    return {input:{程序:i+1,周期:limit},expected,actual,pass:actual.join(',')===expected.join(',')};
+    return {input:{程序:i+1,周期:limit},expected,actual,replay:{program:source,steps:limit},pass:actual.join(',')===expected.join(',')};
    });
    results.push({input:{面积上限:area,实际面积:net.expandedCount},actual:[Number(net.expandedCount<=area)],expected:[1],pass:net.expandedCount<=area});
    return results;
