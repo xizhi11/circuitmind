@@ -38,6 +38,23 @@ async function run(){
   await send('Runtime.enable');
   await send('Page.navigate',{url:pathToFileURL(path.join(__dirname,'dist/index.html')).href});
   for(let i=0;i<100&&!await js("Boolean(document.querySelector('#levels button'))");i++)await sleep(100);
+  assert(await js("!document.querySelector('#landing').hidden && document.querySelector('#workbench-shell').hidden"));
+  assert(await js("document.querySelector('#landing-title img').decode().then(()=>document.querySelector('#landing-title img').naturalWidth>0,()=>false)"));
+  assert.equal(await js("document.querySelector('#landing-output').textContent"), "Q = 0");
+  for(const [input,expected] of [["a",0],["b",1],["a",0],["b",0]]){
+   await js("document.querySelector('#landing-input-"+input+"').click()");
+   assert.equal(await js("document.querySelector('#landing-output').textContent"), "Q = "+expected);
+  }
+  await js("document.querySelector('#landing-tutorial').click()");
+  assert(await js("document.querySelector('#tutorial-dialog').open && !document.querySelector('#landing').hidden"));
+  await js("document.querySelector('#tutorial-close').click();document.querySelector('#landing-lab').click()");
+  assert(await js("location.hash==='#workbench' && document.querySelector('#landing').hidden && !document.querySelector('#workbench-shell').hidden && level.id==='sandbox' && !document.querySelector('#sandbox-guide').hidden"));
+  await js("document.querySelector('#landing-return').click();document.querySelector('#landing-route').click()");
+  assert(await js("document.querySelector('#world').open"));
+  await js("document.querySelector('#close-world').click();document.querySelector('#landing-return').click();document.querySelector('#landing-workshop').click()");
+  assert(await js("document.querySelector('#workshop-dialog').open && document.querySelector('#workshop-works').children.length>=8"));
+  await js("document.querySelector('#close-workshop').click();document.querySelector('#landing-return').click();document.querySelector('#landing-resume').click()");
+  assert(await js("level.id==='nand' && !document.querySelector('#workbench-shell').hidden"));
   assert(await js("document.querySelector('#guided').checked"));
   await js("document.querySelector('#tutorial-open').click()");
   assert(await js("document.querySelector('#tutorial-dialog').open"));
@@ -352,7 +369,11 @@ async function run(){
   await js("document.querySelector('#close-workshop-guide').click();document.querySelector('#tutorial-open').click()");
   assert(await js("document.querySelector('#tutorial-dialog').open && document.querySelector('#tutorial-dialog').getBoundingClientRect().right<=window.innerWidth && document.querySelector('[data-tutorial=light]').getAttribute('aria-pressed')==='true'"));
   await js("document.querySelector('#tutorial-close').click()");
-  assert.deepEqual(errors,[]);console.log('PASS Edge: guided circuit tools, all eight workshops, guides, downloads, and separate build boards');
+  await js("document.querySelector('#landing-return').click()");
+  assert(await js("!location.hash && !document.querySelector('#landing').hidden && document.documentElement.scrollWidth<=window.innerWidth"));
+  await js("document.querySelector('#landing-enter').click()");
+  assert(await js("level.workshop==='light' && !document.querySelector('#workbench-shell').hidden"));
+  assert.deepEqual(errors,[]);console.log('PASS Edge: landing, guided circuits, eight workshops, guides and downloads');
   await send('Browser.close').catch(()=>{});
  }finally{
   socket?.close();if(processHandle.exitCode===null)processHandle.kill();

@@ -1,11 +1,102 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CircuitMind · 从一扇门到一台计算机</title><link rel="stylesheet" href="style.css"><script defer src="wasm.js"></script><script defer src="circuit.js"></script><script defer src="levels.js"></script><script defer src="campaign.js"></script><script defer src="references.js"></script><script defer src="overture.js"></script><script defer src="symphony.js"></script><script defer src="mines32.js"></script><script defer src="course.js"></script><script defer src="devices.js"></script><script defer src="workshop.js"></script><script defer src="light-workshop.js"></script><script defer src="workshop-guides.js"></script><script defer src="app.js"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CircuitMind · 从一扇门到一台计算机</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="landing.css"><script defer src="wasm.js"></script><script defer src="circuit.js"></script><script defer src="levels.js"></script><script defer src="campaign.js"></script><script defer src="references.js"></script><script defer src="overture.js"></script><script defer src="symphony.js"></script><script defer src="mines32.js"></script><script defer src="course.js"></script><script defer src="devices.js"></script><script defer src="workshop.js"></script><script defer src="light-workshop.js"></script><script defer src="workshop-guides.js"></script><script defer src="app.js"></script><script defer src="landing.js"></script></head>
 <body>
+<div id="landing" class="landing">
+  <header class="landing-top">
+    <div class="brand"><span aria-hidden="true">◈</span><strong>CircuitMind</strong></div>
+    <nav class="actions" aria-label="首页导航">
+      <button id="landing-tutorial" type="button">使用教程</button>
+      <button id="landing-enter" type="button" disabled>进入工作台</button>
+    </nav>
+  </header>
+  <main class="landing-content">
+    <div class="landing-hero">
+      <section class="landing-intro" aria-labelledby="landing-title">
+        <h1 id="landing-title" tabindex="-1"><img src="guides/wordmark.png" width="731" height="128" alt="与非门里大乾坤"></h1>
+        <p>从一扇 NAND 门，搭到能运行程序的计算机。</p>
+        <div class="actions landing-actions">
+          <button id="landing-resume" type="button" class="primary" disabled>开始学习</button>
+          <button id="landing-build" type="button" disabled>自由搭建</button>
+        </div>
+      </section>
+      <section class="landing-preview" aria-labelledby="landing-preview-title">
+        <h2 id="landing-preview-title">两颗 NAND 搭出与门</h2>
+        <svg class="landing-diagram" viewBox="0 0 680 220" aria-hidden="true">
+          <g class="landing-wires">
+            <path data-signal="A" d="M71 68H139V91H199"/>
+            <path data-signal="B" d="M71 157H139V130H199"/>
+            <path data-signal="n1" d="M304 110H374V87H418M374 110V134H418"/>
+            <path data-signal="Q" d="M527 110H610"/>
+          </g>
+          <g class="landing-parts">
+            <rect x="18" y="47" width="50" height="42" rx="7"/>
+            <rect x="18" y="136" width="50" height="42" rx="7"/>
+            <path d="M199 67h52a43 43 0 0 1 0 86h-52z"/>
+            <path d="M418 67h52a43 43 0 0 1 0 86h-52z"/>
+            <rect x="611" y="89" width="51" height="42" rx="7"/>
+          </g>
+          <g class="landing-ports">
+            <circle data-signal="A" cx="71" cy="68" r="6"/>
+            <circle data-signal="B" cx="71" cy="157" r="6"/>
+            <circle data-signal="A" cx="199" cy="91" r="6"/>
+            <circle data-signal="B" cx="199" cy="130" r="6"/>
+            <circle data-signal="n1" cx="299" cy="110" r="6"/>
+            <circle data-signal="n1" cx="418" cy="87" r="6"/>
+            <circle data-signal="n1" cx="418" cy="134" r="6"/>
+            <circle data-signal="Q" cx="520" cy="110" r="6"/>
+            <circle data-signal="Q" cx="611" cy="110" r="6"/>
+          </g>
+          <g class="landing-labels" text-anchor="middle" dominant-baseline="central">
+            <text x="43" y="68">A</text><text x="43" y="157">B</text>
+            <text x="241" y="110">NAND</text><text x="458" y="110">NAND</text><text x="637" y="110">Q</text>
+          </g>
+        </svg>
+        <div class="actions landing-signals" aria-label="测试与门输入">
+          <button id="landing-input-a" type="button" aria-pressed="false">A <span>0</span></button>
+          <button id="landing-input-b" type="button" aria-pressed="false">B <span>0</span></button>
+          <output id="landing-output" aria-live="polite">Q = 0</output>
+        </div>
+      </section>
+    </div>
+    <section class="landing-paths" aria-label="游戏入口">
+      <button id="landing-route" class="landing-card" type="button" disabled>
+        <span class="landing-card-title">学习路线 <span aria-hidden="true">↗</span></span>
+        <span class="landing-card-copy">从逻辑门到 CPU，逐关验证。</span>
+        <span class="landing-flow" aria-hidden="true"><b>NAND</b><i></i><b>寄存器</b><i></i><b>CPU</b></span>
+      </button>
+      <button id="landing-lab" class="landing-card" type="button" disabled>
+        <span class="landing-card-title">自由实验室 <span aria-hidden="true">↗</span></span>
+        <span class="landing-card-copy">打开画布，搭建自己的电路。</span>
+        <svg class="landing-card-visual" viewBox="0 0 330 82" aria-hidden="true">
+          <g class="landing-wires"><path data-high="true" d="M51 21H94V34H126M51 62H94V48H126"/><path d="M201 41H274"/></g>
+          <g class="landing-parts"><rect x="15" y="8" width="36" height="27" rx="4"/><rect x="15" y="48" width="36" height="27" rx="4"/><path d="M126 17h45a24 24 0 0 1 0 48h-45z"/><rect x="275" y="27" width="40" height="28" rx="4"/></g>
+          <g class="landing-ports"><circle cx="201" cy="41" r="5"/></g>
+          <g class="landing-labels" text-anchor="middle" dominant-baseline="central"><text x="33" y="21">A</text><text x="33" y="61">B</text><text x="156" y="41">NAND</text><text x="295" y="41">Q</text></g>
+        </svg>
+      </button>
+      <button id="landing-workshop" class="landing-card" type="button" disabled>
+        <span class="landing-card-title">创意工坊 <span aria-hidden="true">↗</span></span>
+        <span class="landing-card-copy">试玩扫雷、迷宫和光路解谜，照着教程复做。</span>
+        <span class="landing-workshop-visual" aria-hidden="true">
+          <span class="landing-mine-preview"><i></i><i>1</i><i>1</i><i></i><i>1</i><i>2</i><i>1</i><i></i><i></i><i>✦</i><i>1</i><i></i></span>
+          <svg class="landing-card-visual" viewBox="0 0 145 82">
+            <rect class="landing-optics-bg" x="1" y="1" width="143" height="80" rx="4"/>
+            <path class="landing-optics-grid" d="M1 27H144M1 54H144M36 1V81M72 1V81M108 1V81"/>
+            <path class="landing-optics-beam" d="M16 20H74V61H128"/>
+            <path class="landing-optics-mirror" d="M66 12l16 16M66 69l16-16"/>
+            <circle cx="16" cy="20" r="5" fill="#b5d9be"/><rect x="122" y="55" width="12" height="12" fill="none" stroke="#b5d9be" stroke-width="2"/>
+          </svg>
+        </span>
+      </button>
+    </section>
+  </main>
+</div>
+<div id="workbench-shell" hidden>
 <header class="topbar">
   <div class="actions header-tools">
     <div class="brand"><span aria-hidden="true">◈</span><strong>CircuitMind</strong></div>
-    <button id="home">☰ 关卡</button><button id="workshop">创意工坊</button><button id="tutorial-open" type="button">使用教程</button><button id="backup" title="备份全部进度">保存</button>
+    <button id="landing-return" type="button">首页</button><button id="home">☰ 关卡</button><button id="workshop">创意工坊</button><button id="tutorial-open" type="button">使用教程</button><button id="backup" title="备份全部进度">保存</button>
     <button id="undo" title="Ctrl+Z">撤销</button><button id="redo" title="Ctrl+Y">重做</button>
     <button id="zoom-out" aria-label="缩小画布">−</button><button id="zoom-in" aria-label="放大画布">＋</button>
   </div>
@@ -196,6 +287,7 @@
       </section>
     </div>
   </section>
+</div>
 </div>
 <dialog id="world"><div class="dialog-heading"><div><p class="eyebrow">CIRCUITMIND · CAMPAIGN</p><h1>从逻辑门，走向自己的计算机</h1><p>构造 · 验证 · 封装 · 复用</p></div><div class="actions"><button id="restart" class="subtle">重开当前关</button><button id="close-world">返回电路</button></div></div><div id="world-map"></div></dialog>
 <dialog id="completion-dialog" aria-labelledby="completion-title" aria-describedby="completion-result">

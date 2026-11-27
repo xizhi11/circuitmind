@@ -9,6 +9,8 @@ let camera={x:0,y:0,scale:1},serial=0;
 let viewport={width:1280,height:760},draggedPart=null;
 let inspectionStack=[],multi=new Set(),clipboard=null;
 let completed={},saved={},library=[],breakpoints=new Set();
+let learningLevelId;
+try{learningLevelId=localStorage.getItem('cm-learning-level');}catch{}
 let storageDatabase=null;
 let mineFlags=false,deviceScreen=[],pendingKeys=[],peripheral=null,workshopEditing=false,mazeMapIndex=0;
 let studio=null,studioAudio=null,programTarget='sender';
@@ -151,6 +153,10 @@ function openLevel(id,fresh=false,keepContext=false,editor=false){
  if($('completion-dialog').open)$('completion-dialog').close();
  if(!keepContext)inspectionStack=[];multi.clear();
  stop();round=null;level=Game.levels.find(l=>l.id===id)||Game.levels[0];
+ if(!level.workshop&&Game.isGraded(level)){
+  learningLevelId=level.id;
+  try{localStorage.setItem('cm-learning-level',level.id);}catch{}
+ }
  mazeMapIndex=0;
  if(level.workshop==='maze'){
   $('maze-map').replaceChildren(...level.maps.map((name,index)=>{
@@ -1605,7 +1611,7 @@ $('file').onchange=async()=>{
  $('file').value='';
 };
 document.addEventListener('keydown',e=>{
- if(document.querySelector?.('dialog[open]'))return;
+ if($('workbench-shell')?.hidden||document.querySelector?.('dialog[open]'))return;
  if(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;
  if(e.key==='Escape'){pending=null;selected=null;multi.clear();draw();}
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='c'){
@@ -1911,7 +1917,7 @@ $('studio-step').onclick=()=>{
 };
 $('studio-reset').onclick=()=>{stop();compileCurrent();draw();};
 function landerKey(e,pressed){
- if(level.demo!=='lander'||workshopEditing||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)||document.querySelector?.('dialog[open]'))return;
+ if($('workbench-shell')?.hidden||level.demo!=='lander'||workshopEditing||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)||document.querySelector?.('dialog[open]'))return;
  const mask={ArrowUp:1,ArrowLeft:2,ArrowRight:4}[e.key];if(!mask)return;
  e.preventDefault();
  studio.keys=pressed?studio.keys|mask:studio.keys&~mask;
@@ -2100,5 +2106,5 @@ async function boot(){
  const lastLevel=Game.levels.find(l=>l.id===last);
  openLevel(lastLevel&&(!locked(lastLevel)||saved[last])?last:firstAvailable().id);
 }
-boot();
+const workbenchReady=boot();
 
