@@ -3,14 +3,78 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const C=require('./dist/circuit.js');
-global.Circuit=C;require('./dist/levels.js');require('./dist/campaign.js');require('./dist/references.js');require('./dist/overture.js');require('./dist/symphony.js');require('./dist/mines32.js');require('./dist/course.js');require('./dist/devices.js');require('./dist/workshop.js');require('./dist/light-workshop.js');require('./dist/workshop-guides.js');
+global.Circuit=C;require('./dist/levels.js');require('./dist/campaign.js');require('./dist/references.js');require('./dist/overture.js');require('./dist/symphony.js');require('./dist/mines32.js');require('./dist/course.js');require('./dist/devices.js');require('./dist/workshop.js');require('./dist/light-workshop.js');require('./dist/workshop-guides.js');require('./dist/lesson-guides.js');
 const {node:n,wire:w}=Game;
 let checks=0;
 function test(name,fn){fn();checks++;process.stdout.write('PASS '+name+'\n');}
 function net(d){const result=C.compile(d.nodes,d.wires);assert.ifError(result.error);return result;}
 test('campaign blueprints and all vector values',()=>{
- for(const l of Game.levels){const d=l.build();C.validate(d);assert(d.nodes.length);for(const v of l.vectors||[])assert(v.expected.every(Number.isInteger));}
+ for(const l of Game.levels){const d=l.build();C.validate(d);assert(d.nodes.length);for(const v of l.vectors||[])assert(v.expected.every(value=>Number.isInteger(value)||value===null||value==='X'));}
  assert(Game.levels.length>=27);
+});
+test('course branches unlock by their dependencies and converge at the CPU',()=>{
+ const byId=new Map(Game.levels.map(lesson=>[lesson.id,lesson]));
+ const pathIds=Game.guidedPath.map(lesson=>lesson.id);
+ assert.equal(new Set(pathIds).size,pathIds.length);
+ for(const lesson of Game.guidedPath){
+  assert(Game.coursePrerequisites(lesson).every(prior=>prior&&pathIds.indexOf(prior.id)<pathIds.indexOf(lesson.id)));
+  assert(Game.courseRoutes.some(group=>group.levels.includes(lesson)));
+ }
+ assert.deepEqual(Game.coursePrerequisites(byId.get('half')).map(lesson=>lesson.id),['xor']);
+ assert.deepEqual(Game.coursePrerequisites(byId.get('register')).map(lesson=>lesson.id),['mux','dff-build']);
+ assert.deepEqual(Game.coursePrerequisites(byId.get('cm8-pixels')).map(lesson=>lesson.id),['cpu-build']);
+ assert.deepEqual(Game.coursePrerequisites(byId.get('s32-stack')).map(lesson=>lesson.id),['wire-s32-io']);
+ assert(!Game.guidedPath.includes(byId.get('shared-bus')));
+ assert(Game.courseRoutes.find(group=>group.id==='optional').levels.includes(byId.get('shared-bus')));
+});
+test('all lessons have progressive hints and runnable demonstrations',()=>{
+ for(const level of Game.levels){
+  const hints=Game.lessonGuide.hints(level);
+  assert(hints.length>=2&&hints.length<=4&&hints.every(Boolean),level.id);
+  const board=Game.lessonGuide.example(level),model=net(board);
+  if(level.verify){assert(level.verify(model,board).every(row=>row.pass),level.id);continue;}
+  if(!level.inputs||!level.outputs)continue;
+  let rows=level.vectors;
+  if(level.sequence)rows=level.sequence.map(input=>({input,expected:level.outputs.map(id=>input[id])}));
+  if(!rows)rows=Array.from({length:2**level.inputs.length},(_,mask)=>{
+   const values=level.inputs.map((_,i)=>(mask>>i)&1);
+   return {input:Object.fromEntries(level.inputs.map((id,i)=>[id,values[i]])),expected:level.expect(values)};
+  });
+  let state=model.initial();
+  const read=result=>level.outputs.map(id=>result.inputs(id)[0]);
+  for(const row of rows){
+   if(row.before)assert.deepEqual(read(model.evaluate(state,row.input)),row.before,level.id+' before clock');
+   const result=level.clocked||level.sequence?model.tick(state,row.input):model.evaluate(state,row.input);
+   assert.deepEqual(read(result),row.expected,level.id);state=result.state??state;
+  }
+ }
+});
+test('RAM and bus examples agree with backend verification',()=>{
+ const {execute}=require('./tools.cjs');
+ for(const id of ['tiny-ram','bus-handoff']){
+  const lesson=Game.levels.find(item=>item.id===id),circuit=Game.lessonGuide.example(lesson),result=execute('test',{circuit,levelId:id});
+  assert.equal(result.passed,result.total,id);
+  if(id==='tiny-ram')assert.equal(result.cases[2].before.Q,42);
+  else{assert.equal(result.cases[0].actual.Q,null);assert.equal(result.cases[5].actual.Q,'X');}
+ }
+});
+test('CM8 pixel challenge checks the actual pattern, empty background and color',()=>{
+ const lesson=Game.levels.find(item=>item.id==='cm8-pixels');
+ const board=lesson.build(),rom=board.nodes.find(node=>node.id==='rom');
+ assert.deepEqual(lesson.verify(net(board))[0].actual,[0,0,0]);
+ const solved=lesson.program.replace('LDI 0','LDI 224');
+ for(const [source,expected] of [[solved,[5,0,1]],[solved.replace('ST 147','ST 128'),[4,1,1]],[solved.replace('ST 147','LDI 3\nST 147\nLDI 224'),[5,0,2]]]){
+  rom.program=C.assemble(source).words;
+  const row=lesson.verify(net(board))[0];
+  assert.deepEqual(row.actual,expected);assert.equal(row.pass,source===solved);
+ }
+});
+test('32-bit output bridge verifies data and the valid signal',()=>{
+ const lesson=Game.levels.find(item=>item.id==='wire-s32-io');
+ const board=lesson.build();
+ assert(C.compile(board.nodes,board.wires).error);
+ board.wires=Game.symphony.machine(lesson.program).wires;
+ assert.equal(lesson.verify(net(board))[0].pass,true);
 });
 const {command,data,model,framebuffer,diskImage,transport}=Game.workshopKit;
 function runWorkshop(name){
@@ -257,6 +321,11 @@ test('UI navigation, campaign verification, packaging and restoration events',()
  assert(vm.runInContext("!net.error && doc.nodes.find(n=>n.id==='pc').type==='CUSTOM' && !courseViolation()",context));
  elements.get('test').click();
  elements.get('next-level').click();
+ assert(vm.runInContext("level.id==='cm8-pixels' && doc.nodes.find(n=>n.id==='pc').type==='CUSTOM' && !net.error",context));
+ elements.get('program').value=elements.get('program').value.replace('LDI 0','LDI 28');
+ elements.get('assemble').click();elements.get('test').click();
+ assert(vm.runInContext("completed['cm8-pixels'] && testCases[0].pass",context));
+ elements.get('next-level').click();
  assert(vm.runInContext("level.id==='cm8-loop' && doc.nodes.find(n=>n.id==='pc').type==='CUSTOM' && !net.error",context));
  vm.runInContext("guided=false;library=[];",context);
  vm.runInContext("openLevel('cpu'); for(let i=0;i<12;i++)step();",context);assert.equal(elements.get('terminal').textContent,'ABCD');
@@ -264,6 +333,16 @@ test('UI navigation, campaign verification, packaging and restoration events',()
  vm.runInContext("openLevel('cm8-loop');",context);
  assert(vm.runInContext('!net.error && state.ram.length===256 && doc.nodes.find(n=>n.id==="rom").program[0]===15*256',context));
  vm.runInContext("openLevel('full');doc.nodes.find(n=>n.id==='p').type='AND';edit();",context);elements.get('package').click();elements.get('package-name').value='FA';elements.get('save-package').click();assert.equal(JSON.parse(store.get('cm-library')).length,1);
+ elements.get('test').click();
+ const best=vm.runInContext('optimizationBest.full',context);
+ assert(Number.isInteger(best)&&best>0);
+ vm.runInContext("doc.nodes.push(Game.node('extra','NAND',10,10),Game.node('extra-in','IN',0,0));doc.wires.push(Game.wire('extra-in','extra',0),Game.wire('extra-in','extra',1));edit()",context);
+ elements.get('test').click();
+ assert(vm.runInContext('testCases.every(row=>row.pass)',context));
+ assert.equal(vm.runInContext('optimizationBest.full',context),best);
+ vm.runInContext("openLevel('full',true);persist()",context);
+ assert.match(elements.get('optimization-status').textContent,new RegExp(String(best)));
+ assert.equal(JSON.parse(store.get('cm-optimization')).full,best);
  elements.get('home').click();assert.equal(elements.get('world').open,true);
 });
 process.stdout.write('\n'+checks+' checks passed; '+Game.levels.length+' game scenes.\n');

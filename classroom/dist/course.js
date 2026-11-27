@@ -52,6 +52,21 @@ lab.push(
  sequence('edge','捕捉上升沿',{D:1},{Q:1},'只在刚采入的 D 由 0 变 1 的那一拍输出 1。可用两级状态进行比较。',['REG','AND','NOT','BIT'],[[[0],[0]],[[1],[1]],[[1],[0]],[[0],[0]],[[1],[1]]]),
  sequence('sum8','逐拍累计',{D:8,EN:1},{Q:8},'EN 为 1 时把 D 加到累计值，八位溢出回绕。',['REG8','ADD8'],[[[12,1],[12]],[[90,0],[12]],[[250,1],[6]],[[0,1],[6]],[[35,1],[41]]])
 );
+const arithmeticCases=[[0,0],[255,1],[127,1],[128,128],[200,55],[73,94],[255,255],[85,170]];
+const overflow=([a,b])=>{const total=a+b,q=total&255;return [q,total>>>8,Number(((a^q)&(b^q)&128)!==0)];};
+const romWords=[0x12,0xA5,0x3C,0xE7];
+const teachingLabs=[
+ logic('signed-overflow','进位和有符号溢出',2,{A:8,B:8},{Q:8,C:1,V:1},'输出八位和 Q。C 表示无符号进位，V 表示补码有符号溢出。比较 255+1 和 127+1。',['ADD8','SPLIT8','NOT','AND','OR','XOR','BIT'],overflow,arithmeticCases),
+ sequence('reset-register','写入、保持与复位',{D:1,EN:1,RST:1},{Q:1},'在时钟沿按优先级更新。RST=1 清零；否则 EN=1 写入 D；其余保持。',['REG','NOT','AND','OR','BIT'],[[[1,1,0],[1]],[[0,0,0],[1]],[[1,1,1],[0]],[[1,0,0],[0]],[[1,1,0],[1]],[[1,0,1],[0]]]),
+ sequence('tiny-ram','用两个寄存器搭 RAM',{ADR:1,DATA:8,WE:1},{Q:8},'搭一块 2×8 位 RAM。每拍只向选中的地址写入，读取随 ADR 改变。关闭 WE 后交替读两个地址。',['REG8','MUX8','NOT','AND'],[[[0,42,1],[42]],[[1,99,1],[99]],[[0,0,0],[42]],[[1,0,0],[99]],[[1,165,1],[165]],[[0,0,0],[42]],[[1,0,0],[165]]]),
+ logic('tiny-rom','用地址选出 ROM 字节',3,{A:1,B:1},{Q:8},'A 为地址低位，B 为高位。四个地址分别读取 0x12、0xA5、0x3C、0xE7。用常数和选择器实现这个只读表。',['CONST','MUX8'],([a,b])=>[romWords[a+2*b]]),
+ logic('bus-handoff','总线交接与冲突',3,{A:8,B:8,EA:1,EB:1},{Q:8,ACTIVE:1,FAULT:1},'两路设备共用一条数据总线。两端断开时 Q 为 Z，两个不同值同时驱动时 Q 为 X。区分浮空、低电平和冲突。',['TRI8','BUS8'],([a,b,ea,eb])=>{const fault=ea&&eb&&a!==b;return [fault?'X':ea?a:eb?b:null,Number(!!(ea||eb)),Number(!!fault)];},[[42,99,0,0],[0,99,1,0],[42,99,1,0],[42,99,0,1],[42,42,1,1],[42,99,1,1],[42,99,0,1]])
+];
+const tinyRam=teachingLabs.find(lesson=>lesson.id==='tiny-ram');
+tinyRam.checkBeforeClock=true;
+const readBefore=[0,0,42,99,99,42,165];
+tinyRam.vectors.forEach((row,i)=>{row.before=[readBefore[i]];});
+lab.push(...teachingLabs);
 // These checkpoints keep the rest of the processor connected. Only the
 // named subsystem is unfinished, and grading runs the repaired machine.
 function construction(id,title,machine,source,targets,text,expected){
@@ -126,6 +141,29 @@ function speedRound(id,title,radix){
 }
 Game.levels.push(speedRound('binary-race','二进制速答',2),speedRound('hex-race','十六进制速答',16),speedRound('gate-race','逻辑门速答',0));
 const cpu=Game.levels.find(l=>l.id==='cpu');
+const pixelAddresses=[147,154,155,156,163];
+const pixelProgram='; 把 0 改成你选的颜色，例如 224（红）\nLDI 0\n'+pixelAddresses.map(address=>'ST '+address).join('\n')+'\nHLT';
+const targetPixels=Object.fromEntries(pixelAddresses.map(address=>[address,82]));
+function pixelStatus(memory=[]){
+ const lit=pixelAddresses.map(address=>memory[address]||0).filter(Boolean);
+ const extra=Array.from({length:64},(_,i)=>128+i).filter(address=>memory[address]&&!Object.hasOwn(targetPixels,address)).length;
+ return [lit.length,extra,new Set(lit).size];
+}
+Game.levels.push({id:'cm8-pixels',title:'用自己的 CM8 点亮像素屏',chapter:'06 程序与应用',tag:'CM8 · 第一个像素程序',
+ text:'用 CM8 向显存写入十字图案。五个目标像素需为同一种颜色，其余像素保持熄灭。',
+ program:pixelProgram,pixelTarget:targetPixels,pixelStatus,build(){
+  const board=cpu.build();board.nodes.find(n=>n.id==='rom').program=Circuit.assemble(pixelProgram).words;
+  board.source=pixelProgram;return board;
+ },verify(net){
+  let state=net.initial(),steps=0;
+  if(!Array.isArray(state.ram))throw Error('请保留 CM8 的 RAM，像素来自地址 128～191');
+  while(steps<64){
+   const tick=net.tick(state);state=tick.state;steps++;
+   if(tick.values.ctrl?.[6]===0)break;
+  }
+  const expected=[5,0,1],actual=pixelStatus(state.ram);
+  return [{input:{检查:'目标亮点 / 多余亮点 / 颜色种数'},expected,actual,replay:{steps},pass:actual.every((value,i)=>value===expected[i])}];
+ }});
 function cm8Program(id,title,text,examples){
  const program='; 将输出写入地址 255\nHLT';
  return {id,title,chapter:'06 程序与应用',tag:'CM8 · 汇编实验',text,program,build(){
@@ -165,12 +203,14 @@ Game.levels.push(
 );
 for(const id of ['alu-cpu','control-build'])Game.levels.find(l=>l.id===id).chapter='05 计算机';
 const isComputer=Game.isComputer;
-Game.isComputer=l=>l.id==='cm8-loop'||l.id==='cm8-branch'||isComputer(l);
+Game.isComputer=l=>l.id.startsWith('cm8-')||isComputer(l);
 const order=['nand','not','constant','and','or','nor','and3','or3','xor','xnor','odd','majority','two-of-four','mux','demux','decode2','decode3','onehot','mux4','half','full','count4','not8','and8','nand8','xor-byte','mux8','adder8','carry8','subtract8','negate','equal8','unsigned','signed','shift8','lsr','asr','mod4','parity8','register','delay2','toggle','edge','register8','counter','pc-build','sum8','memory','alu-build','cpu','cpu-build','gate-cpu','display','mines','overture','wire-registers','wire-immediate','wire-pc','o8-binary','o8-echo','o8-double','o8-branch','o8-repeat','s32','wire-s32-immediate','wire-s32-io','s32-cmp','wire-s32-ram','s32-memory','wire-s32-disk','s32-stack','wire-s32-stack','s32-function','capitalize','popcount','leading','triangle','multiply','divide','sort','rng','mines32','sandbox'];
 order.splice(order.indexOf('register'),0,'sr-latch','dff-build');
 order.splice(order.indexOf('xor-byte'),0,'or8-build');
 order.splice(order.indexOf('cpu'),0,'alu-cpu','control-build');
-order.splice(order.indexOf('display'),0,'cm8-loop','cm8-branch');
+order.splice(order.indexOf('memory'),0,'reset-register','tiny-ram','tiny-rom','bus-handoff');
+order.splice(order.indexOf('subtract8'),0,'signed-overflow');
+order.splice(order.indexOf('display'),0,'cm8-pixels','cm8-loop','cm8-branch');
 order.splice(order.indexOf('memory'),0,'shared-bus');
 order.splice(order.indexOf('mux'),0,'gate-race','binary-race','hex-race');
 const rank=id=>{const i=order.indexOf(id);return i<0?order.length-1:i;};
@@ -194,17 +234,19 @@ const guided=[
  ['xor-byte','八位异或',null,['NAND','SPLIT8','JOIN8'],['xor']],
  ['mux8','八位选择器','S 为 0 时输出 A，为 1 时输出 B。',['NAND','SPLIT8','JOIN8'],['not','and','or','mux']],
  ['adder8','八位加法器','输出 A 与 B 相加后的低八位。',['NAND','SPLIT8','JOIN8','BIT'],['and','or','xor','half','full']],
+ ['signed-overflow'],
  ['subtract8','八位减法器','输出 A 减 B 后的低八位。',['NAND','SPLIT8','JOIN8','CONST','BIT'],['not8','adder8']],
  ['sr-latch','SR 锁存器',null,['NAND','DELAY'],['not','and','or']],
  ['dff-build','D 触发器',null,['NAND'],['not','and','or','sr-latch']],
  ['register','一位寄存器','EN 为 1 时在下一拍保存 D，EN 为 0 时保持上一次的值。',['NAND'],['not','and','or','mux','dff-build']],
  ['register8','八位寄存器',null,['SPLIT8','JOIN8'],['register']],
  ['pc-build','八位计数器','EN 为 1 时每拍加一，到 255 后回到 0。EN 为 0 时保持。',['CONST'],['register8','adder8']],
+ ['reset-register'],['tiny-ram'],['tiny-rom'],
  ['memory','字节存储器','写使能为 1 时将 DATA 保存到 ADR。Q 随地址变化，显示该地址当前的值。',['RAM8']],
  ['alu-cpu','CM8 ALU',null,['NAND','SPLIT8','JOIN8','CONST','BIT'],['not','and','or','not8','and8','or8-build','xor-byte','mux8','adder8','subtract8']],
  ['control-build','CM8 控制器',null,['NAND','SPLIT16','SPLIT8','JOIN8','CONST','BIT'],['not','and','or','decode2','decode3','mux8']],
  ['cpu-build','CM8 CPU','接通程序计数、取指、译码、运算和写回。载入的程序应在 16 拍之内依次输出 A、B、C、D、E。',['ROM16','RAM8','CONST','BIT','OUT8'],['register8','alu-cpu','control-build','mux8','adder8','pc-build']],
- ['cm8-loop'],['cm8-branch'],['s32'],['s32-stack'],['s32-function']
+ ['cm8-pixels'],['cm8-loop'],['cm8-branch'],['wire-s32-io'],['s32-stack'],['s32'],['s32-function']
 ];
 for(const [id,moduleName,goal,parts,modules=[]] of guided){
  const level=byId.get(id);
@@ -230,11 +272,33 @@ byId.get('pc-build').verify=net=>{
  });
 };
 Game.guidedPath=guided.map(([id])=>byId.get(id));
-Game.prerequisite=l=>{
- if(l.id==='sandbox'||l.workshop)return null;
- const primary=Game.guidedPath.indexOf(l);
- if(primary>=0)return Game.guidedPath.slice(0,primary).reverse().find(Game.isGraded)||null;
- const i=Game.levels.indexOf(l);
- return Game.levels.slice(0,i).reverse().find(Game.isGraded)||null;
+const courseNeeds={
+ nand:[],not:['nand'],and:['not'],or:['not'],xor:['and','or'],
+ mux:['and','or'],half:['xor'],full:['half'],decode2:['and','or'],decode3:['decode2'],
+ not8:['not'],and8:['and'], 'or8-build':['or'], 'xor-byte':['xor'],mux8:['mux'],
+ adder8:['full'],subtract8:['not8','adder8'],
+ 'sr-latch':['and','or'],'dff-build':['sr-latch'],register:['mux','dff-build'],
+ register8:['register'],'pc-build':['register8','adder8'],memory:['register8'],
+ 'alu-cpu':['and8','or8-build','xor-byte','mux8','subtract8'],
+ 'control-build':['decode3','mux8'],
+ 'cpu-build':['register8','alu-cpu','control-build','mux8','adder8','pc-build','memory'],
+ 'cm8-pixels':['cpu-build'],'cm8-loop':['cpu-build'],'cm8-branch':['cpu-build'],
+ 'wire-s32-io':['cm8-loop','cm8-branch'],'s32-stack':['wire-s32-io'],s32:['s32-stack'],'s32-function':['s32-stack'],
+ 'and3':['and'],majority:['and','or'],demux:['mux'],carry8:['adder8'],signed:['subtract8'],
+ parity8:['xor-byte'],delay2:['register'],'shared-bus':['register8','mux8'],
+ 'signed-overflow':['adder8'],'reset-register':['register'],'tiny-ram':['register8','mux8'],'tiny-rom':['mux8','decode2'],'bus-handoff':['shared-bus']
 };
+Game.coursePrerequisites=level=>(courseNeeds[level.id]||[]).map(id=>byId.get(id));
+const routeGroups=[
+ ['logic','基础逻辑','搭出后面各条路线共用的逻辑门。',['nand','not','and','or','xor']],
+ ['arithmetic','算术','用全加器搭八位加法器，给 CM8 提供加一和算术运算。',['half','full','not8','and8','or8-build','xor-byte','adder8','signed-overflow','subtract8','alu-cpu']],
+ ['datapath','数据通路','选择数据从哪里来，再把指令译成控制信号。',['mux','decode2','decode3','mux8','control-build']],
+ ['memory','记忆与时钟','寄存器保存状态，计数器推进取指，RAM 读写数据。',['sr-latch','dff-build','register','register8','pc-build','reset-register','tiny-ram','tiny-rom','memory']],
+ ['machine','计算机与程序','接起 CM8 后，用它写显存、做循环和条件分支。',['cpu-build','cm8-pixels','cm8-loop','cm8-branch']],
+ ['advanced','从 CM8 到 32 位机','先接通字输出，再练习栈，最后单步观察函数调用。',['wire-s32-io','s32-stack','s32','s32-function']],
+ ['optional','选做实验','做完相关基础关就可进入，进度独立于教学路线。',['and3','majority','demux','carry8','signed','parity8','delay2','shared-bus','bus-handoff']],
+ ['sandbox','自由实验室','用空画布搭自己的组合或时序电路。',['sandbox']]
+];
+for(const id of ['full','adder8'])byId.get(id).areaChallenge=true;
+Game.courseRoutes=routeGroups.map(([id,title,description,ids])=>({id,title,description,levels:ids.map(key=>byId.get(key))}));
 })();

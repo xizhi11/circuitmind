@@ -45,7 +45,7 @@
 
   function courseLevel() {
     const last = Game.levels.find(item => item.id === learningLevelId);
-    return last && !locked(last) ? last : firstAvailable();
+    return last && (!guided || Game.guidedPath.includes(last)) && !locked(last) ? last : firstAvailable();
   }
 
   function renderRoute() {

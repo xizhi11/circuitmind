@@ -12,6 +12,7 @@ let completed={},saved={},library=[],breakpoints=new Set();
 let learningLevelId;
 try{learningLevelId=localStorage.getItem('cm-learning-level');}catch{}
 let storageDatabase=null;
+let optimizationBest={};
 let mineFlags=false,deviceScreen=[],pendingKeys=[],peripheral=null,workshopEditing=false,mazeMapIndex=0;
 let studio=null,studioAudio=null,programTarget='sender';
 const lightKit=Game.lightWorkshop;
@@ -34,14 +35,24 @@ function showDetails(tab,open=true){
 }
 for(const tab of Object.keys(detailScreens))$('detail-'+tab).onclick=()=>showDetails(tab);
 $('detail-toggle').onclick=()=>showDetails(detailTab,$('detail-body').hidden);
-function locked(l){
- const prior=Game.prerequisite(l);
- return guided&&!completed[l.id]&&prior&&!completed[prior.id];
+function missingPrerequisites(lesson){
+ return guided&&!completed[lesson.id]?Game.coursePrerequisites(lesson).filter(prior=>!completed[prior.id]):[];
 }
+function locked(lesson){return missingPrerequisites(lesson).length>0;}
+function prerequisiteText(lessons){return '先完成'+lessons.map(lesson=>'「'+lesson.title+'」').join('、');}
 function nextLevel(){
- if(level.workshop)return null;
- const path=guided&&Game.guidedPath.includes(level)?Game.guidedPath:Game.levels.filter(l=>!l.workshop);
- return path[path.indexOf(level)+1];
+ if(level.workshop||level.id==='sandbox')return null;
+ if(!guided){
+  const catalog=Game.levels.filter(lesson=>!lesson.workshop);
+  return catalog[catalog.indexOf(level)+1];
+ }
+ const path=Game.guidedPath,index=path.indexOf(level);
+ if(index<0)return null;
+ const canAdvance=lesson=>missingPrerequisites(lesson).every(prior=>prior===level);
+ const following=path[index+1];
+ if(following&&!Game.isGraded(following)&&!completed[path[index+2]?.id]&&canAdvance(following))return following;
+ const remaining=[...path.slice(index+1),...path.slice(0,index)];
+ return remaining.find(lesson=>Game.isGraded(lesson)&&!completed[lesson.id]&&canAdvance(lesson));
 }
 function firstAvailable(){
  return Game.guidedPath.find(l=>Game.isGraded(l)&&!completed[l.id]&&!locked(l))||Game.guidedPath[0];
@@ -59,14 +70,14 @@ $('next-level').onclick=()=>{
  const next=nextLevel();
  if(next&&!locked(next))openLevel(next.id);
 };
-try{completed=JSON.parse(localStorage.getItem('cm-completed')||'{}');saved=JSON.parse(localStorage.getItem('cm-circuits')||'{}');library=JSON.parse(localStorage.getItem('cm-library')||'[]');if(!Array.isArray(library))library=[];}catch{}
+try{completed=JSON.parse(localStorage.getItem('cm-completed')||'{}');saved=JSON.parse(localStorage.getItem('cm-circuits')||'{}');library=JSON.parse(localStorage.getItem('cm-library')||'[]');if(!Array.isArray(library))library=[];optimizationBest=JSON.parse(localStorage.getItem('cm-optimization')||'{}')||{};}catch{}
 function persist(){try{
  if(!inspectionStack.length)saved[level.id]=clone(doc);
  const last=inspectionStack.length?inspectionStack[0].levelId:level.id;
  if(storageDatabase){
-  const tx=storageDatabase.transaction('save','readwrite');tx.objectStore('save').put({saved,completed,library,last},'profile');
+  const tx=storageDatabase.transaction('save','readwrite');tx.objectStore('save').put({saved,completed,library,last,optimizationBest},'profile');
   tx.onerror=()=>notify('浏览器存储失败，请备份全部进度到文件。');
- }else{localStorage.setItem('cm-circuits',JSON.stringify(saved));localStorage.setItem('cm-completed',JSON.stringify(completed));localStorage.setItem('cm-library',JSON.stringify(library));localStorage.setItem('cm-last-level',last);}
+ }else{localStorage.setItem('cm-circuits',JSON.stringify(saved));localStorage.setItem('cm-completed',JSON.stringify(completed));localStorage.setItem('cm-library',JSON.stringify(library));localStorage.setItem('cm-last-level',last);localStorage.setItem('cm-optimization',JSON.stringify(optimizationBest));}
  }catch{notify('浏览器存储空间不足，请备份全部进度到文件。');}}
 function notify(text){$('toast').textContent=text;$('toast').classList.add('show');clearTimeout(notify.timeout);notify.timeout=setTimeout(()=>$('toast').classList.remove('show'),3500);}
 function svg(tag,attrs={},parent=scene){const el=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v] of Object.entries(attrs))el.setAttribute(k,String(v));parent.append(el);return el;}
@@ -153,7 +164,7 @@ function openLevel(id,fresh=false,keepContext=false,editor=false){
  if($('completion-dialog').open)$('completion-dialog').close();
  if(!keepContext)inspectionStack=[];multi.clear();
  stop();round=null;level=Game.levels.find(l=>l.id===id)||Game.levels[0];
- if(!level.workshop&&Game.isGraded(level)){
+ if(!level.workshop&&Game.isGraded(level)&&(!guided||Game.guidedPath.includes(level))){
   learningLevelId=level.id;
   try{localStorage.setItem('cm-learning-level',level.id);}catch{}
  }
@@ -194,6 +205,8 @@ function openLevel(id,fresh=false,keepContext=false,editor=false){
  $('detail-program').hidden=!Game.isComputer(level);
  showDetails(Game.isComputer(level)?'program':'component',true);
  syncProgramPanel();
+ $('pixel-challenge').hidden=!level.pixelTarget||inspectionStack.length>0;
+ if(level.pixelTarget)paintPixels($('pixel-target'),level.pixelTarget,128);
  $('test').disabled=!level.expect&&!level.sequence&&!level.vectors&&!level.verify;
  $('exhaustive').hidden=!exhaustiveWidths();
  $('test-title').textContent=Game.isComputer(level)?'机器与终端':level.id==='sandbox'||level.id==='counter'?'电路状态':'验证你的电路';
@@ -217,11 +230,17 @@ function renderNav(){
   if(l.chapter!==chapter){chapter=l.chapter;const h=document.createElement('h3');h.textContent=chapter;h.className='chapter-title';$('levels').append(h);}
   const title=guided&&l.id==='full'?l.courseName:l.title;
   const b=button((completed[l.id]?'✓ ':'')+title,()=>openLevel(l.id),l.id===level.id?'active':'');
-  b.disabled=!!locked(l);if(b.disabled)b.title='先完成「'+Game.prerequisite(l).title+'」';
+  const missing=missingPrerequisites(l);b.disabled=missing.length>0;if(b.disabled)b.title=prerequisiteText(missing);
   b.setAttribute('aria-current',l.id===level.id?'page':'false');$('levels').append(b);
  }
  const lessons=visibleLessons().filter(Game.isGraded);
  $('progress').textContent=lessons.filter(l=>completed[l.id]).length+' / '+lessons.length+' 项实验已验证';
+ const area=$('optimization-status');
+ area.hidden=!level.areaChallenge||!completed[level.id]||inspectionStack.length>0;
+ if(!area.hidden){
+  const best=optimizationBest[level.id]??doc.bestArea;
+  area.textContent=best===undefined?'选做优化：再运行一次测试，记录这份电路的展开元件数。':'选做优化 · 个人最佳 '+best+' 个展开元件。减少元件后可重新运行测试。';
+ }
  const next=nextLevel();
  $('next-level').hidden=!next||!!locked(next)||(!completed[level.id]&&Game.isGraded(level));
 }
@@ -242,7 +261,7 @@ function completeLevel(detail,reward=''){
  const canAdvance=next&&!locked(next);
  const lessons=visibleLessons().filter(Game.isGraded);
  const done=lessons.filter(l=>completed[l.id]).length;
- const finishedRoute=guided&&Game.guidedPath.at(-1)===level&&done===lessons.length;
+ const finishedRoute=guided&&lessons.includes(level)&&done===lessons.length;
  $('completion-title').textContent=finishedRoute?'教学路线已完成':'完成「'+$('title').textContent+'」';
  const lead=level.drill?'':Game.isComputer(level)?'程序跑通了！':'搭对了！';
  $('completion-result').textContent=lead+detail+'。';
@@ -662,7 +681,9 @@ function draw(){
   if(peripheral)$('device-state').textContent=peripheral.describe()+(peripheral.done?(peripheral.pass?'\n通过':'\n挑战结束'):'');
   const registers=s32?Game.symphony.names.slice(1).map((name,i)=>name+' '+fmt(values['r'+(i+1)]?.[0],32)).join('   '):o8?Array.from({length:6},(_,i)=>'R'+i+' '+fmt(values['r'+i]?.[0],8)).join('   '):'ACC '+fmt(values.acc?.[0],8);
   $('cpu-state').textContent='PC '+fmt(values.pc?.[0],s32?32:8)+'   '+registers+'   IR '+fmt(values.rom?.[0],s32?32:o8?8:16);
-  renderDebugger();if(o8)display.hidden=true;else renderScreen();
+  renderDebugger();
+  if(level.pixelTarget){display.hidden=true;paintPixels($('pixel-live'),state.ram||[],128);}
+  else if(o8)display.hidden=true;else renderScreen();
  }
 }
 function renderMines(){
@@ -1265,6 +1286,7 @@ function step(render=true){
 }
 function saveTrace(result){
  if(replayCase&&level.outputs)replayCase.result=level.outputs.map(id=>result.inputs(id)[0]);
+ if(replayCase&&level.pixelStatus)replayCase.result=level.pixelStatus(state.ram);
  records.push({tick:ticks,signals:traceSignals.map(p=>p.output?result.values[p.id]?.[0]:result.inputs(p.id)[0])});
  if(records.length>32)records.shift();
 }
@@ -1303,6 +1325,7 @@ function renderTrace(){
   });
  }
 }
+const displayTestValue=value=>value===null?'Z':value;
 function renderTests(){
  const el=$('results');el.replaceChildren();
  if(!testCases.length){el.textContent=level.expect||level.sequence||level.vectors||level.verify?'连接完成后运行测试。失败用例可以逐行回放。':'运行或单步，观察电路中信号的变化。';return;}
@@ -1312,7 +1335,7 @@ function renderTests(){
  for(const text of ['输入 / 操作','预期','实际','回放']){const th=document.createElement('th');th.textContent=text;head.append(th);}table.append(head);
  testCases.forEach((c,i)=>{
   const row=document.createElement('tr');row.className=(c.pass?'success':'error')+(testIndex===i?' replaying':'');
-  for(const text of [Object.entries(c.input).map(([k,v])=>k+'='+v).join(' '),c.expected.join(' / '),c.actual.join(' / ')]){const td=document.createElement('td');td.textContent=text;row.append(td);}
+  for(const text of [Object.entries(c.input).map(([k,v])=>k+'='+v).join(' '),c.expected.map(displayTestValue).join(' / '),c.actual.map(displayTestValue).join(' / ')]){const td=document.createElement('td');td.textContent=text;row.append(td);}
   const td=document.createElement('td');td.append(button(c.replay?(c.pass?'回放':'定位'):'查看',()=>replay(i)));row.append(td);table.append(row);
  });el.append(table);
 }
@@ -1337,11 +1360,11 @@ function renderReplay(){
  const expected=level.outputs&&ticks<end&&row.expectedBefore?row.expectedBefore:row.expected;
  const stage=end===0?'组合逻辑':'第 '+ticks+' / '+end+' 拍';
  const ahead=level.outputs&&ticks<end&&!row.expectedBefore;
- const outputMismatch=!peripheral&&Game.isComputer(level)&&emitted.some((value,i)=>value!==expected[i]);
+ const outputMismatch=!peripheral&&!level.pixelStatus&&Game.isComputer(level)&&emitted.some((value,i)=>value!==expected[i]);
  const compareNow=ticks>=end||!!row.expectedBefore;
  const mismatch=outputMismatch||compareNow&&(observed.length!==expected.length||observed.some((value,i)=>value!==expected[i]));
  const summary='用例 '+(testIndex+1)+' / '+testCases.length+' · '+stage+' · '+input+
-  (ahead?' · 推进后预期 [':' · 预期 [')+expected.join(', ')+'] · 当前 ['+observed.join(', ')+']'+(mismatch?' · 输出不符':'');
+  (ahead?' · 推进后预期 [':' · 预期 [')+expected.map(displayTestValue).join(', ')+'] · 当前 ['+observed.map(displayTestValue).join(', ')+']'+(mismatch?' · 输出不符':'');
  if($('replay-summary').textContent!==summary)$('replay-summary').textContent=summary;
  $('replay-prev').disabled=testIndex<=0;
  $('replay-next').disabled=testIndex>=testCases.length-1;
@@ -1350,7 +1373,7 @@ function renderReplay(){
 function replay(i){
  const row=testCases[i];if(!row)return;
  restoreLive();stop();testIndex=i;
- const asList=values=>values.join(', ');
+ const asList=values=>values.map(displayTestValue).join(', ');
  const input=Object.entries(row.input).map(([k,v])=>k+'='+v).join('，');
  if(!row.replay){
   $('hint').textContent='本组条件 '+input+'。预期 ['+asList(row.expected)+']，实际 ['+asList(row.actual)+']。';
@@ -1382,7 +1405,7 @@ function replay(i){
  $('step-summary').textContent='';
  $('hint').textContent=config.steps
   ?(config.program?'已加载该用例的临时程序。':'已回到该用例的起点。')+'点「单步」逐拍观察，也可查看波形或指令。'
-  :row.pass?'这组输入符合预期。':focused+' 的预期输出为 '+row.expected[bad]+'，实际为 '+row.actual[bad]+'。已标出上游连线。';
+  :row.pass?'这组输入符合预期。':focused+' 的预期输出为 '+displayTestValue(row.expected[bad])+'，实际为 '+displayTestValue(row.actual[bad])+'。已标出上游连线。';
  syncClock();refreshReplayView();
 }
 $('replay-prev').onclick=()=>replay(testIndex-1);
@@ -1419,14 +1442,16 @@ function recordPass(total,exhaustive=false){
   saved['machine-cm8']=clone(doc);
   reward='你的 CM8 已保存，首次进入后续 CM8 编程关时可以用它运行程序。';
  }
- if(level.id.endsWith('-budget')){
-  doc.bestArea=Math.min(doc.bestArea??Infinity,net.expandedCount);
-  reward='本次使用 '+net.expandedCount+' 个展开元件，最小通过规模为 '+doc.bestArea+' 个。';
+ if(level.areaChallenge||level.id.endsWith('-budget')){
+  const best=Math.min(optimizationBest[level.id]??doc.bestArea??Infinity,net.expandedCount);
+  optimizationBest[level.id]=best;
+  reward=[reward,'本次使用 '+net.expandedCount+' 个展开元件，个人最佳 '+best+' 个。'].filter(Boolean).join(' ');
  }
  renderTests();
  const detail=total+' / '+total+(exhaustive?' 组穷举输入符合预期':' 组测试通过');
  $('hint').textContent=reward||detail+'。';
  completeLevel(detail,reward);
+ if(level.areaChallenge&&!$('optimization-status').hidden)$('optimization-status').textContent='选做优化 · 上次通过 '+net.expandedCount+' 个展开元件 · 个人最佳 '+optimizationBest[level.id]+' 个。';
 }
 function courseViolation(){
  if(!guided||!level.courseParts)return null;
@@ -1492,7 +1517,7 @@ $('test').onclick=async()=>{
    if(level.checkBeforeClock){
     const prior=net.evaluate(testState,input);
     before=level.outputs.map(id=>prior.inputs(id)[0]);
-    expectedBefore=index?testCases[index-1].expected:level.outputs.map(()=>0);
+    expectedBefore=level.vectors?.[index]?.before??(index?testCases[index-1].expected:level.outputs.map(()=>0));
    }
    if(level.sequence||level.clocked){result=net.tick(testState,input);testState=result.state;}
    else result=net.evaluate(testState,input);
@@ -1570,6 +1595,7 @@ function syncProgramSource(){
   :doc.draftSource??doc.source??level.program??'';
 }
 $('workshop-program-target').onchange=()=>{programTarget=$('workshop-program-target').value;syncProgramSource();};
+$('pixel-program').onclick=()=>{restoreLive();showDetails('program');$('program').focus();};
 $('assemble').onclick=()=>{
  try{
   const o8=level.machine==='overture';
@@ -1599,6 +1625,7 @@ $('file').onchange=async()=>{
    for(const d of Object.values(data.saved))validate(d);
    for(const spec of data.library)validate({nodes:[{id:'check',type:'CUSTOM',x:0,y:0,spec}],wires:[]});
    saved=clone(data.saved);completed=Object.fromEntries(Game.levels.filter(l=>data.completed?.[l.id]===true).map(l=>[l.id,true]));library=clone(data.library);
+   optimizationBest=Object.fromEntries(Object.entries(data.optimizationBest||{}).filter(([id,count])=>Game.levels.some(lesson=>lesson.id===id)&&(Number.isInteger(count)&&count>0)));
    openLevel(data.last||'nand');persist();notify('全部电路、元件库与关卡进度已恢复');return;
   }
   const circuit=Circuit.unpackBlueprint(data);
@@ -1656,20 +1683,61 @@ $('save-package').onclick=()=>{
 };
 function downloadFile(text,name,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function download(data,name){downloadFile(JSON.stringify(data,null,2),name,'application/json');}
-$('backup').onclick=()=>{persist();download({kind:'CircuitMind-save',version:3,saved,completed,library,last:level.id},'CircuitMind-save.json');};
-function showWorld(){
- const container=$('world-map');container.replaceChildren();let chapter='',section;
- for(const l of visibleLessons()){
-  if(l.chapter!==chapter){chapter=l.chapter;section=document.createElement('section');const h=document.createElement('h2');h.textContent=chapter;section.append(h);container.append(section);}
-  const b=button((completed[l.id]?'✓ ':'○ ')+l.title,()=>{$('world').close();openLevel(l.id);},completed[l.id]?'done':'');b.disabled=!!locked(l);if(b.disabled)b.title='先完成「'+Game.prerequisite(l).title+'」';section.append(b);
+$('backup').onclick=()=>{persist();download({kind:'CircuitMind-save',version:3,saved,completed,library,last:level.id,optimizationBest},'CircuitMind-save.json');};
+const worldQuery=$('world-query'),worldScope=$('world-scope');
+function worldGroups(catalog){
+ if(!catalog)return Game.courseRoutes;
+ const chapters=new Map();
+ for(const lesson of Game.levels.filter(item=>!item.workshop)){
+  if(!chapters.has(lesson.chapter))chapters.set(lesson.chapter,{title:lesson.chapter,levels:[]});
+  chapters.get(lesson.chapter).levels.push(lesson);
  }
- $('world').showModal();
+ return [...chapters.values()];
 }
+function renderWorld(){
+ const container=$('world-map');container.replaceChildren();
+ const query=worldQuery.value.trim().toLowerCase();
+ const catalog=worldScope.value==='catalog';
+ $('world-overview').hidden=!!query||catalog;
+ let matches=0;
+ for(const group of worldGroups(catalog)){
+  const levels=group.levels.filter(lesson=>[lesson.title,lesson.courseName,lesson.chapter,lesson.text,group.title].some(text=>text?.toLowerCase().includes(query)));
+  if(!levels.length)continue;
+  matches+=levels.length;
+  const section=document.createElement('section');section.className='course-route';
+  if(group.id)section.setAttribute('data-route',group.id);
+  const heading=document.createElement('h3');heading.textContent=group.title;section.append(heading);
+  if(group.description){const note=document.createElement('p');note.textContent=group.description;section.append(note);}
+  const list=document.createElement('div');list.className='course-route-lessons';
+  for(const lesson of levels){
+   const missing=missingPrerequisites(lesson),done=completed[lesson.id];
+   const card=button('',()=>{$('world').close();openLevel(lesson.id);$('title').focus();},'course-lesson'+(done?' done':''));
+   card.type='button';card.disabled=missing.length>0;card.setAttribute('data-lesson',lesson.id);
+   card.setAttribute('aria-current',lesson.id===level.id?'step':'false');
+   const name=document.createElement('span');name.className='course-lesson-name';name.textContent=lesson.title;
+   const status=document.createElement('span');status.className='course-lesson-status';
+   status.textContent=done?'已通过':missing.length?'未解锁':lesson.id===level.id?'当前关卡':'可进入';
+   card.append(name,status);
+   if(missing.length){
+    const hint=document.createElement('small');hint.textContent=prerequisiteText(missing);card.append(hint);
+   }
+   list.append(card);
+  }
+  section.append(list);container.append(section);
+ }
+ const main=Game.guidedPath.filter(Game.isGraded);
+ const done=main.filter(lesson=>completed[lesson.id]).length;
+ $('world-summary').textContent=query?(matches?'找到 '+matches+' 个关卡':'没有找到匹配的关卡。可搜索 NAND、寄存器或显存。'):'教学路线 '+done+' / '+main.length+' 已通过';
+}
+function showWorld(){
+ worldQuery.value='';worldScope.value=guided?'route':'catalog';renderWorld();$('world').showModal();
+}
+worldQuery.addEventListener('input',renderWorld);worldScope.addEventListener('change',renderWorld);
 $('home').onclick=showWorld;$('close-world').onclick=()=>$('world').close();
 const tutorialFigures={
  wiring:['wiring.png','基础接线与测试标注图','图中用两个 NAND 搭出与门。「最初的 NAND」关卡只需要一个。'],
  light:['light.png','光路解谜板调试标注图','在电路视图中逐拍观察坐标和方向。点击「返回试玩」可操作棋盘。'],
- levels:['levels.png','关卡选择与学习路径标注图','从顶栏「关卡」打开地图，按前置关卡推进。'],
+ levels:['levels.png','关卡选择与学习路径标注图','从顶栏「关卡」打开学习路线。可搜索关卡，或查看未解锁关卡还需要完成哪些前置实验。'],
  workshop:['workshop.png','创意工坊试玩和从零搭建标注图','从顶栏「创意工坊」打开作品列表，再选试玩或搭建。']
 };
 function showTutorialTopic(topic){
@@ -2099,7 +2167,7 @@ async function boot(){
   try{
    storageDatabase=await new Promise((resolve,reject)=>{const request=indexedDB.open('CircuitMind',1);request.onupgradeneeded=()=>request.result.createObjectStore('save');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);request.onblocked=()=>reject(Error('存档数据库被其他标签页阻止'));});
    const profile=await new Promise((resolve,reject)=>{const request=storageDatabase.transaction('save').objectStore('save').get('profile');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
-   if(profile){saved=profile.saved||{};completed=profile.completed||{};library=Array.isArray(profile.library)?profile.library:[];last=profile.last||last;}
+   if(profile){saved=profile.saved||{};completed=profile.completed||{};library=Array.isArray(profile.library)?profile.library:[];last=profile.last||last;optimizationBest=profile.optimizationBest||{};}
    storageDatabase.onversionchange=()=>{storageDatabase.close();storageDatabase=null;};
   }catch{notify('高级存档不可用，改用浏览器基础存储。请定期导出备份。');}
  }

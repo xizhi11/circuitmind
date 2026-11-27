@@ -64,11 +64,11 @@ function execute(tool,request){
    const expected=Array.isArray(test.expected)?Object.fromEntries((level?.outputs||[]).map((id,i)=>[id,test.expected[i]])):test.expected;
    if(!expected||typeof expected!=='object'||!Object.keys(expected).length)throw Error('expected 必须包含输出元件及期望值');
    const ids=Object.keys(expected);
-   for(const id of ids){const n=nodes.get(id);if(!n||C.definition(n).outputs.length||!Number.isInteger(expected[id]))throw Error('测试输出无效');}
+   for(const id of ids){const n=nodes.get(id),value=expected[id];if(!n||C.definition(n).outputs.length||!(Number.isInteger(value)||value===null||value==='X'))throw Error('测试输出无效');}
    const read=r=>Object.fromEntries(ids.map(id=>[id,r.inputs(id)[0]]));
    const timing=level?.checkBeforeClock?{
     before:read(net.evaluate(current,test.input)),
-    expectedBefore:previous||Object.fromEntries(ids.map(id=>[id,0]))
+    expectedBefore:test.before?Object.fromEntries(ids.map((id,i)=>[id,test.before[i]])):previous||Object.fromEntries(ids.map(id=>[id,0]))
    }:{};
    const r=clocked?net.tick(current,test.input):net.evaluate(current,test.input);if(clocked)current=r.state;
    const actual=read(r);previous=expected;

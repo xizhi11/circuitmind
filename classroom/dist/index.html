@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CircuitMind · 从一扇门到一台计算机</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="landing.css"><script defer src="wasm.js"></script><script defer src="circuit.js"></script><script defer src="levels.js"></script><script defer src="campaign.js"></script><script defer src="references.js"></script><script defer src="overture.js"></script><script defer src="symphony.js"></script><script defer src="mines32.js"></script><script defer src="course.js"></script><script defer src="devices.js"></script><script defer src="workshop.js"></script><script defer src="light-workshop.js"></script><script defer src="workshop-guides.js"></script><script defer src="app.js"></script><script defer src="landing.js"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CircuitMind · 从一扇门到一台计算机</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="landing.css"><script defer src="wasm.js"></script><script defer src="circuit.js"></script><script defer src="levels.js"></script><script defer src="campaign.js"></script><script defer src="references.js"></script><script defer src="overture.js"></script><script defer src="symphony.js"></script><script defer src="mines32.js"></script><script defer src="course.js"></script><script defer src="devices.js"></script><script defer src="workshop.js"></script><script defer src="light-workshop.js"></script><script defer src="workshop-guides.js"></script><script defer src="lesson-guides.js"></script><script defer src="app.js"></script><script defer src="lesson-hints.js"></script><script defer src="landing.js"></script></head>
 <body>
 <div id="landing" class="landing">
   <header class="landing-top">
@@ -140,8 +140,17 @@
 
   <main class="workbench">
     <section class="mission">
-      <div><span id="tag" class="eyebrow"></span><p id="description"></p><p id="completion-status" role="status"></p></div>
-      <div class="actions mission-actions"><button id="sandbox-guide" class="primary" type="button" hidden>新手搭建</button><button id="test" class="primary">运行测试</button><button id="next-level" hidden>下一关</button><button id="workshop-view" hidden>编辑电路与汇编</button><button id="workshop-guide" hidden>技术说明与搭建</button></div>
+      <div><span id="tag" class="eyebrow"></span><p id="description"></p><p id="completion-status" role="status"></p><p id="optimization-status" hidden></p></div>
+      <div class="actions mission-actions"><button id="lesson-hint-open" type="button" aria-haspopup="dialog">提示</button><button id="sandbox-guide" class="primary" type="button" hidden>新手搭建</button><button id="test" class="primary">运行测试</button><button id="next-level" hidden>下一关</button><button id="workshop-view" hidden>编辑电路与汇编</button><button id="workshop-guide" hidden>技术说明与搭建</button></div>
+    </section>
+    <section id="pixel-challenge" aria-labelledby="pixel-title" hidden>
+      <div class="pixel-instructions">
+        <h2 id="pixel-title">用 CM8 画一个十字</h2>
+        <p>把 <code>LDI 0</code> 改成非零颜色，例如 <code>224</code> 是红色。汇编并加载后，在左侧点「播放」或「单步」，观察五条 <code>ST</code> 指令逐个写入像素。</p>
+        <button id="pixel-program" type="button">编辑汇编</button>
+      </div>
+      <figure><canvas id="pixel-target" class="pixel-screen" width="8" height="8" aria-label="目标图案，五个像素组成十字"></canvas><figcaption>目标图案</figcaption></figure>
+      <figure><canvas id="pixel-live" class="pixel-screen" width="8" height="8" aria-label="当前 CPU 的 8×8 显存"></canvas><figcaption>当前 CPU 显存</figcaption></figure>
     </section>
     <section id="workshop-play" aria-label="工坊试玩" hidden>
       <section id="light-panel" aria-labelledby="light-title" hidden>
@@ -289,7 +298,48 @@
   </section>
 </div>
 </div>
-<dialog id="world"><div class="dialog-heading"><div><p class="eyebrow">CIRCUITMIND · CAMPAIGN</p><h1>从逻辑门，走向自己的计算机</h1><p>构造 · 验证 · 封装 · 复用</p></div><div class="actions"><button id="restart" class="subtle">重开当前关</button><button id="close-world">返回电路</button></div></div><div id="world-map"></div></dialog>
+<dialog id="world" aria-labelledby="world-title">
+  <div class="dialog-heading">
+    <h2 id="world-title">从逻辑门，走向自己的计算机</h2>
+    <div class="actions"><button id="restart" class="subtle" type="button">重开当前关</button><button id="close-world" type="button" autofocus>返回电路</button></div>
+  </div>
+  <div class="world-tools">
+    <label for="world-query">搜索关卡 <input id="world-query" type="search" placeholder="名称或知识点"></label>
+    <label for="world-scope">范围 <select id="world-scope"><option value="route">学习路线</option><option value="catalog">全部关卡</option></select></label>
+    <p id="world-summary" role="status"></p>
+  </div>
+  <ol id="world-overview" aria-label="推荐学习顺序">
+    <li>基础逻辑</li><li>算术 · 数据通路 · 记忆</li><li>组装 CM8</li><li>点亮像素屏 · 写程序</li>
+  </ol>
+  <div id="world-map"></div>
+</dialog>
+<dialog id="lesson-hint-dialog" aria-labelledby="lesson-hint-title">
+  <div class="dialog-heading"><h2 id="lesson-hint-title">提示</h2><button id="lesson-hint-close" type="button" autofocus>关闭</button></div>
+  <section id="lesson-hint-content">
+    <p id="lesson-hint-count" class="muted"></p>
+    <ol id="lesson-hint-steps"></ol>
+    <p id="lesson-demo-error" role="status"></p>
+    <div class="actions">
+      <button id="lesson-hint-more" type="button">进一步提示</button>
+      <button id="lesson-demo-open" type="button" class="primary" hidden>生成示范电路</button>
+    </div>
+  </section>
+  <section id="lesson-demo" aria-label="示范电路" hidden>
+    <p>示范独立运行。更改输入或单步观察信号，你的关卡电路和通关记录会保留。</p>
+    <div class="actions lesson-demo-controls">
+      <button id="lesson-demo-back" type="button">返回提示</button>
+      <button id="lesson-demo-step" type="button" class="primary">单步</button>
+      <button id="lesson-demo-reset" type="button">复位</button>
+      <button id="lesson-demo-fit" type="button">适应画布</button>
+    </div>
+    <p id="lesson-demo-summary" role="status"></p>
+    <div id="lesson-demo-inputs" aria-label="示范输入"></div>
+    <div id="lesson-demo-outputs" aria-label="示范输出"></div>
+    <details id="lesson-demo-program" hidden><summary>示范程序</summary><pre id="lesson-demo-code"></pre></details>
+    <div class="lesson-demo-scroll" tabindex="0" aria-label="可滚动的示范画布"><svg id="lesson-demo-svg" role="img" aria-label="示范元件及其连接"></svg></div>
+    <pre id="lesson-demo-device" hidden></pre>
+  </section>
+</dialog>
 <dialog id="completion-dialog" aria-labelledby="completion-title" aria-describedby="completion-result">
   <div class="completion-heading"><span class="completion-mark" aria-hidden="true">✓</span><h2 id="completion-title"></h2></div>
   <p id="completion-result"></p>
